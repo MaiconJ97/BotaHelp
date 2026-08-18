@@ -1,0 +1,12 @@
+;;; Visual LISP make file [V1.0] BotaHelpBr saved to:[C:/Users/maico/Documents/Busanello/Civil3D/Bota] at:[8/13/26] 
+(PRV-DEF (:target . "BotaHelpBr.VLX")
+	 (:active-x . T)
+	 (:separate-namespace)
+	 (:protected . T)
+	 (:load-file-list (:lsp "bota_help_v5_pt.lsp"))
+	 (:require-file-list)
+	 (:ob-directory)
+	 (:tmp-directory)
+	 (:optimization . st)
+)
+;; EOF

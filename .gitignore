@@ -1,0 +1,14 @@
+# Generated video frames
+.video_frames_*/
+
+# AutoCAD temporary and backup files
+*.ac$
+*.bak
+*.dwl
+*.dwl2
+*.sv$
+
+# Operating system and editor files
+.DS_Store
+Thumbs.db
+*~
