@@ -27,6 +27,11 @@ principales expuestos son `BOTA`, `BOTA2` y `BOTA3`.
 - Conservar los helpers privados con el prefijo propio de cada comando, como
   `b3_` para `BOTA3`, para evitar colisiones entre rutinas cargadas.
 - Declarar las variables locales en la lista de argumentos de cada `defun`.
+- `T` es una constante booleana: nunca declararla como variable local, asignarle
+  un valor ni dejarla como cabeza de una expresion ejecutable. El error `bad
+  function: T` suele indicar una estructura de parentesis o una rama de control
+  mal formada; en flujo geometrico critico preferir `if` anidados con retorno
+  explicito sobre una rama por defecto `(T ...)`.
 - Cuando se modifiquen variables de sistema de AutoCAD, guardar su valor y
   restaurarlo tanto en el flujo normal como en el manejador local `*error*`.
 - El manejador `*error*` debe eliminar entidades auxiliares temporales y tratar
@@ -49,6 +54,8 @@ principales expuestos son `BOTA`, `BOTA2` y `BOTA3`.
    permanecen entidades auxiliares tras un error o una cancelacion.
 6. Revisar la linea de comandos de AutoCAD para detectar errores de AutoLISP o
    de automatizacion COM.
+7. Tras tocar estructuras de control, comprobar el balance de parentesis y que
+   `T` no se haya convertido accidentalmente en una llamada de funcion.
 
 No existe una suite automatizada de pruebas ni se detecto un repositorio Git en
 esta carpeta. La validacion funcional manual en Civil 3D es el control

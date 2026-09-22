@@ -72,7 +72,8 @@
 (defun _bota_botaf_ranges_valid_p (ranges / range rest other valid)
   (setq valid (= (length ranges) 4))
   (foreach range ranges
-    (if (not (and (= (length range) 4)
+    (if (not (and (listp range)
+                  (= (length range) 4)
                   (numberp (car range))
                   (numberp (cadr range))
                   (numberp (caddr range))
@@ -127,17 +128,6 @@
   (setq *BOTA2_DEBUG_LAYER* "BOTA2_DEBUG")
 )
 
-(defun _bota2d_pt3 (p)
-  (if p
-    (list
-      (car p)
-      (cadr p)
-      (if (numberp (caddr p)) (caddr p) 0.0)
-    )
-    nil
-  )
-)
-
 (defun _bota2d_ensure_layer (/ data)
   (if (not (tblsearch "LAYER" *BOTA2_DEBUG_LAYER*))
     (progn
@@ -169,66 +159,6 @@
         (setq i (1+ i))
       )
     )
-  )
-)
-
-(defun _bota2d_closest (e p / res)
-  (if (and e p (entget e))
-    (progn
-      (setq res
-        (vl-catch-all-apply
-          'vlax-curve-getClosestPointTo
-          (list e p)
-        )
-      )
-      (if (vl-catch-all-error-p res)
-        nil
-        (_bota2d_pt3 res)
-      )
-    )
-    nil
-  )
-)
-
-(defun _bota2d_offset_all (e dist / obj res out item en)
-  (if (and e dist (entget e))
-    (progn
-      (setq obj (vlax-ename->vla-object e))
-      (setq res
-        (vl-catch-all-apply
-          'vlax-invoke
-          (list obj 'Offset dist)
-        )
-      )
-      (if (vl-catch-all-error-p res)
-        nil
-        (progn
-          (if (= (type res) 'VARIANT)
-            (setq res (vlax-variant-value res))
-          )
-          (if (= (type res) 'SAFEARRAY)
-            (setq res (vlax-safearray->list res))
-          )
-          (if (/= (type res) 'LIST)
-            (setq res (list res))
-          )
-          (setq out nil)
-          (foreach item res
-            (setq en
-              (vl-catch-all-apply
-                'vlax-vla-object->ename
-                (list item)
-              )
-            )
-            (if (not (vl-catch-all-error-p en))
-              (setq out (cons en out))
-            )
-          )
-          (reverse out)
-        )
-      )
-    )
-    nil
   )
 )
 
@@ -351,103 +281,6 @@
   )
 )
 
-(defun _bota2d_entries (plus minus / out e)
-  (setq out nil)
-  (foreach e plus
-    (setq out (append out (list (list e 1.0))))
-  )
-  (foreach e minus
-    (setq out (append out (list (list e -1.0))))
-  )
-  out
-)
-
-(defun _bota2d_entry_by_distance (entries ref near / best bestD entry d p)
-  ;; Reproduz apenas a selecao atual do BOTA2 para torna-la visivel.
-  (setq best nil)
-  (setq bestD nil)
-  (foreach entry entries
-    (if (and entry (car entry) (entget (car entry)))
-      (progn
-        (setq p (_bota2d_closest (car entry) ref))
-        (if p
-          (progn
-            (setq d (distance ref p))
-            (if (or (not best)
-                    (if near (< d bestD) (> d bestD)))
-              (progn
-                (setq best entry)
-                (setq bestD d)
-              )
-            )
-          )
-        )
-      )
-    )
-  )
-  best
-)
-
-(defun _bota2d_delete_entries_except (entries keep / entry e)
-  (foreach entry entries
-    (setq e (car entry))
-    (if (and e (entget e) (/= e keep))
-      (entdel e)
-    )
-  )
-)
-
-(defun _bota2d_triplets (values / out)
-  (setq out nil)
-  (while (and values (caddr values))
-    (setq out (cons (list (car values) (cadr values) (caddr values)) out))
-    (setq values (cdddr values))
-  )
-  (reverse out)
-)
-
-(defun _bota2d_intersection_best (e1 e2 ref / obj1 obj2 result points best bestD p d)
-  ;; Somente a intersecao real dos dois offsets visiveis no diagnostico.
-  (if (and e1 e2 ref (entget e1) (entget e2))
-    (progn
-      (setq obj1 (vlax-ename->vla-object e1))
-      (setq obj2 (vlax-ename->vla-object e2))
-      (setq result
-        (vl-catch-all-apply
-          'vlax-invoke
-          (list obj1 'IntersectWith obj2 0)
-        )
-      )
-      (if (or (vl-catch-all-error-p result) (not result))
-        nil
-        (progn
-          (if (= (type result) 'VARIANT)
-            (setq result (vlax-variant-value result))
-          )
-          (if (= (type result) 'SAFEARRAY)
-            (setq result (vlax-safearray->list result))
-          )
-          (setq points (_bota2d_triplets result))
-          (setq best nil)
-          (setq bestD nil)
-          (foreach p points
-            (setq p (_bota2d_pt3 p))
-            (setq d (distance p ref))
-            (if (or (not best) (< d bestD))
-              (progn
-                (setq best p)
-                (setq bestD d)
-              )
-            )
-          )
-          best
-        )
-      )
-    )
-    nil
-  )
-)
-
 (defun c:BOTA2DEBUGCLEAR ()
   (vl-load-com)
   (_bota2d_ensure_layer)
@@ -456,143 +289,92 @@
   (princ)
 )
 
-(defun c:BOTA2DEBUG (/ *error* selCab selGuide eCab eGuide pCabPick pGuidePick
-                       pCab pGuide pOffsetPoint tamImpl seguridad offCabDist
-                       offGuideDist cabPlus cabMinus guidePlus guideMinus
-                       cabEntries guideEntries cabSelected guideSelected
-                       height pLegend legendRows)
-  ;; Mostra somente os cliques, os offsets escolhidos e sua intersecao real.
+(defun c:BOTA2DEBUG
+    (/ *error* selCab selGuide eCab eGuide pCabPick pGuidePick pCab pGuide
+       tamImpl seguridad data pOffsetPoint usedVirtual cabSelected guideSelected
+       height pLegend legendRows offsetError offsetComError
+       b2Temps b2Outputs b2Original b2Committed
+       offCab offGuia offCentro tmpExtCircle guiaLocal cabLocal)
   (vl-load-com)
+  (_bota2_define_helpers)
 
   (defun *error* (msg)
+    (b2_clear_temporaries)
+    (_bota2d_clear)
     (if (and msg (/= msg "Function cancelled") (/= msg "quit / exit abort"))
       (prompt (strcat "\nErro em BOTA2DEBUG: " msg))
     )
     (princ)
   )
 
-  (if (not *BOTA_IMPL*)      (setq *BOTA_IMPL* 36.578))
-  (if (not *BOTA_SEGURIDAD*) (setq *BOTA_SEGURIDAD* 0.200))
-  (setq tamImpl *BOTA_IMPL*)
-  (setq seguridad *BOTA_SEGURIDAD*)
-  (setq offCabDist (/ tamImpl 2.0))
-  (setq offGuideDist (+ offCabDist seguridad))
+  (setq tamImpl *BOTA_IMPL* seguridad *BOTA_SEGURIDAD*)
   (setq height (max 0.250 (min 2.500 (/ tamImpl 10.0))))
-
   (_bota2d_ensure_layer)
   (_bota2d_clear)
-  (prompt "\nBOTA2DEBUG - clics, intersecao real e offsets selecionados.")
-  (prompt "\nSelecione a cabeceira no mesmo ponto usado em BOTA2: ")
-  (setq selCab (entsel))
-
-  (if (not selCab)
-    (prompt "\nNenhuma cabeceira selecionada.")
+  (prompt "\nBOTA2DEBUG - clics, offsets e intersecao usados por BOTA2.")
+  (setq selCab (entsel "\nSelecione a cabeceira no mesmo ponto usado em BOTA2: "))
+  (if selCab
     (progn
-      (setq eCab (car selCab))
-      (setq pCabPick (_bota2d_pt3 (cadr selCab)))
-      (setq pCab (_bota2d_closest eCab pCabPick))
-      (if (not pCab)
-        (prompt "\nA cabeceira selecionada nao e uma curva valida.")
+      (setq eCab (car selCab) pCabPick (b2_pt3 (cadr selCab)))
+      (setq pCab (b2_closest_point eCab pCabPick))
+      (if pCab
         (progn
-          (prompt "\nSelecione a linha guia no mesmo ponto usado em BOTA2: ")
-          (setq selGuide (entsel))
-          (if (not selGuide)
-            (prompt "\nNenhuma linha guia selecionada.")
+          (setq selGuide (entsel "\nSelecione a linha guia no mesmo ponto usado em BOTA2: "))
+          (if selGuide
             (progn
-              (setq eGuide (car selGuide))
-              (setq pGuidePick (_bota2d_pt3 (cadr selGuide)))
-              (setq pGuide (_bota2d_closest eGuide pGuidePick))
-              (if (not pGuide)
-                (prompt "\nA linha guia selecionada nao e uma curva valida.")
+              (setq eGuide (car selGuide) pGuidePick (b2_pt3 (cadr selGuide)))
+              (setq pGuide (b2_closest_point eGuide pGuidePick))
+              (if (and pGuide (> tamImpl 0.0) (>= seguridad 0.0))
                 (progn
-                  ;; Os mesmos criterios da selecao principal de BOTA2:
-                  ;; cabeceira em direcao ao clique da guia e guia afastando
-                  ;; da cabeceira. Nenhuma coordenada X/Y e combinada.
-                  (setq cabPlus (_bota2d_offset_all eCab offCabDist))
-                  (setq cabMinus (_bota2d_offset_all eCab (- offCabDist)))
-                  (setq guidePlus (_bota2d_offset_all eGuide offGuideDist))
-                  (setq guideMinus (_bota2d_offset_all eGuide (- offGuideDist)))
-                  (setq cabEntries (_bota2d_entries cabPlus cabMinus))
-                  (setq guideEntries (_bota2d_entries guidePlus guideMinus))
-                  (setq cabSelected
-                    (_bota2d_entry_by_distance cabEntries pGuidePick T)
-                  )
-                  (setq guideSelected
-                    (_bota2d_entry_by_distance guideEntries pCab nil)
-                  )
-
-                  (if (and cabSelected guideSelected)
+                  (setq data
+                    (b2_prepare_offsets eCab eGuide pCab pGuidePick tamImpl seguridad))
+                  (setq cabSelected (car data) guideSelected (cadr data))
+                  (setq pOffsetPoint (caddr data) usedVirtual (cadddr data))
+                  (if cabSelected (_bota2d_style_entity cabSelected 3))
+                  (if guideSelected (_bota2d_style_entity guideSelected 4))
+                  (_bota2d_mark pCabPick nil 2 height)
+                  (_bota2d_mark pGuidePick nil 30 height)
+                  (setq legendRows
+                    (list (list "CLIC CABECEIRA" 2) (list "CLIC GUIA" 30)))
+                  (if pOffsetPoint
                     (progn
-                      (setq pOffsetPoint
-                        (_bota2d_intersection_best
-                          (car cabSelected) (car guideSelected) pGuidePick
-                        )
-                      )
-                      ;; A camada de diagnostico deve conter somente o par final.
-                      (_bota2d_delete_entries_except cabEntries (car cabSelected))
-                      (_bota2d_delete_entries_except guideEntries (car guideSelected))
-                      (_bota2d_style_entity (car cabSelected) 3)
-                      (_bota2d_style_entity (car guideSelected) 4)
-
-                      ;; Os marcadores preservam as coordenadas exatas dos clics.
-                      (_bota2d_mark pCabPick nil 2 height)
-                      (_bota2d_mark pGuidePick nil 30 height)
-                      (if pOffsetPoint
-                        (_bota2d_mark pOffsetPoint nil 5 height)
-                      )
-                      (setq pLegend
-                        (_bota2d_default_legend_point
-                          pCabPick pGuidePick
-                          (if pOffsetPoint pOffsetPoint pCabPick)
-                          height
-                        )
-                      )
+                      (_bota2d_mark pOffsetPoint nil 5 height)
                       (setq legendRows
-                        (list
-                          (list "CLIC CABECEIRA" 2)
-                          (list "CLIC GUIA" 30)
-                          (list "OFFSET CABECEIRA SELECIONADO" 3)
-                          (list "OFFSET GUIA SELECIONADO" 4)
-                        )
-                      )
-                      (if pOffsetPoint
-                        (setq legendRows
-                          (append
-                            (list
-                              (list "CLIC CABECEIRA" 2)
-                              (list "CLIC GUIA" 30)
-                              (list "INTERSECAO REAL DOS OFFSETS" 5)
-                            )
-                            (cddr legendRows)
-                          )
-                        )
-                      )
-                      (_bota2d_draw_legend pLegend legendRows height)
-                      (prompt
-                        (strcat
-                          "\nDiagnostico criado na camada " *BOTA2_DEBUG_LAYER*
-                          ". Mostrados somente os offsets selecionados."
-                        )
-                      )
-                      (if (not pOffsetPoint)
-                        (prompt "\nOs offsets selecionados nao possuem intersecao real neste tramo.")
-                      )
-                      (prompt "\nUse BOTA2DEBUGCLEAR para apagar somente este diagnostico.")
-                    )
-                    (progn
-                      (_bota2d_delete_entries_except cabEntries nil)
-                      (_bota2d_delete_entries_except guideEntries nil)
-                      (prompt "\nNao foi possivel selecionar os offsets de cabecera e guia.")
+                        (append legendRows
+                          (list (list
+                            (if usedVirtual "INTERSECAO VIRTUAL (ATE 1 m)"
+                              "INTERSECAO REAL DOS OFFSETS") 5))))
                     )
                   )
+                  (if cabSelected
+                    (setq legendRows (append legendRows
+                      (list (list "OFFSET CABECEIRA SELECIONADO" 3))))
+                  )
+                  (if guideSelected
+                    (setq legendRows (append legendRows
+                      (list (list "OFFSET GUIA SELECIONADO" 4))))
+                  )
+                  (setq pLegend
+                    (_bota2d_default_legend_point pCabPick pGuidePick
+                      (if pOffsetPoint pOffsetPoint pCabPick) height))
+                  (_bota2d_draw_legend pLegend legendRows height)
+                  (setq b2Outputs (list cabSelected guideSelected) b2Committed T)
+                  (b2_clear_temporaries)
+                  (if offsetError (prompt (strcat "\n" offsetError)))
+                  (prompt "\nUse BOTA2DEBUGCLEAR para apagar somente este diagnostico.")
                 )
+                (prompt "\nGuia ou parametros invalidos.")
               )
             )
+            (prompt "\nNenhuma linha guia selecionada.")
           )
         )
+        (prompt "\nA cabeceira selecionada nao e uma curva valida.")
       )
     )
+    (prompt "\nNenhuma cabeceira selecionada.")
   )
+  (b2_clear_temporaries)
   (princ)
 )
 
@@ -601,7 +383,273 @@
 ;; Criador: Maicon Marcarini
 ;; ============================================================
 
-(defun _bota_show_dcl (/ dclFile fn dclId status _v_rGiro _v_tamImpl _v_distSeg _v_seguridad _v_filletR _v_filletSeg _v_botafR _v_botafSeg _v_botafRanges _v_joinCab _v_cutCircle i range)
+(defun _bota_cfg_default_file (/ folder)
+  (setq folder (getvar "DWGPREFIX"))
+  (if (or (not folder) (= folder ""))
+    (setq folder (getvar "TEMPPREFIX"))
+  )
+  (strcat folder "BotaHelp_config.txt")
+)
+
+(defun _bota_cfg_number (text / value)
+  ;; A conversao e deliberadamente numerica: o arquivo nunca e avaliado como Lisp.
+  (if (and text (= (type text) 'STR))
+    (progn
+      (setq value
+        (distof
+          (vl-string-translate "," "." (vl-string-trim " \t" text))
+          2
+        )
+      )
+      (if (numberp value) (float value) nil)
+    )
+    nil
+  )
+)
+
+(defun _bota_cfg_split (text separator / pos out)
+  (setq out nil)
+  (while (setq pos (vl-string-search separator text))
+    (setq out (append out (list (substr text 1 pos))))
+    (setq text (substr text (+ pos 2)))
+  )
+  (append out (list text))
+)
+
+(defun _bota_cfg_range_from_text (text / values)
+  (if text
+    (progn
+      (setq values (_bota_cfg_split text ";"))
+      (if (= (length values) 4)
+        (mapcar '_bota_cfg_number values)
+        nil
+      )
+    )
+    nil
+  )
+)
+
+(defun _bota_cfg_value (data key / pair)
+  (setq pair (assoc key data))
+  (if pair (cdr pair) nil)
+)
+
+(defun _bota_cfg_values_valid_p (values / rGiro tamImpl distSeg seguridad filletR filletSeg botafR botafSeg ranges joinCab cutCircle)
+  (if (and (listp values) (= (length values) 11))
+    (progn
+      (setq rGiro     (nth 0 values))
+      (setq tamImpl   (nth 1 values))
+      (setq distSeg   (nth 2 values))
+      (setq seguridad (nth 3 values))
+      (setq filletR   (nth 4 values))
+      (setq filletSeg (nth 5 values))
+      (setq botafR    (nth 6 values))
+      (setq botafSeg  (nth 7 values))
+      (setq ranges    (nth 8 values))
+      (setq joinCab   (nth 9 values))
+      (setq cutCircle (nth 10 values))
+      (and (numberp rGiro) (> rGiro 0.0)
+           (numberp tamImpl) (> tamImpl 0.0)
+           (numberp distSeg) (> distSeg 0.0)
+           (numberp seguridad) (>= seguridad 0.0)
+           (numberp filletR) (> filletR 0.0)
+           (numberp filletSeg) (> filletSeg 0.0)
+           (numberp botafR) (> botafR 0.0)
+           (numberp botafSeg) (> botafSeg 0.0)
+           (_bota_botaf_ranges_valid_p ranges)
+           (or (= joinCab 0.0) (= joinCab 1.0))
+           (or (= cutCircle 0.0) (= cutCircle 1.0))
+      )
+    )
+    nil
+  )
+)
+
+(defun _bota_cfg_apply_values (values)
+  (setq *BOTA_RGIRO*      (nth 0 values))
+  (setq *BOTA_IMPL*       (nth 1 values))
+  (setq *BOTA_DISTSEG*    (nth 2 values))
+  (setq *BOTA_SEGURIDAD*  (nth 3 values))
+  (setq *BOTA_FILLET_R*   (nth 4 values))
+  (setq *BOTA_FILLET_SEG* (nth 5 values))
+  (setq *BOTAF_FILLET_R*  (nth 6 values))
+  (setq *BOTAF_FILLET_SEG* (nth 7 values))
+  (setq *BOTAF_AUTO_RANGES* (nth 8 values))
+  (setq *BOTA_CONECTAR_CAB* (/= (nth 9 values) 0.0))
+  (setq *BOTA_CORTAR_CIRCULO* (/= (nth 10 values) 0.0))
+  (setq *BOTA_CONECTAR_CAB_CONFIGURADO* T)
+  (setq *BOTA_CORTAR_CIRCULO_CONFIGURADO* T)
+)
+
+(defun _bota_cfg_write_pair (fn key value)
+  (write-line (strcat key "=" value) fn)
+)
+
+(defun _bota_cfg_range_to_text (range)
+  (strcat
+    (rtos (car range) 2 6) ";"
+    (rtos (cadr range) 2 6) ";"
+    (rtos (caddr range) 2 6) ";"
+    (rtos (nth 3 range) 2 6)
+  )
+)
+
+(defun _bota_cfg_save_file (path / fn ranges i)
+  (setq fn (open path "w"))
+  (if fn
+    (progn
+      (write-line "BOTA_CONFIG_V1" fn)
+      (_bota_cfg_write_pair fn "RGIRO" (rtos *BOTA_RGIRO* 2 6))
+      (_bota_cfg_write_pair fn "IMPL" (rtos *BOTA_IMPL* 2 6))
+      (_bota_cfg_write_pair fn "DISTSEG" (rtos *BOTA_DISTSEG* 2 6))
+      (_bota_cfg_write_pair fn "SEGURIDAD" (rtos *BOTA_SEGURIDAD* 2 6))
+      (_bota_cfg_write_pair fn "FILLET_R" (rtos *BOTA_FILLET_R* 2 6))
+      (_bota_cfg_write_pair fn "FILLET_SEG" (rtos *BOTA_FILLET_SEG* 2 6))
+      (_bota_cfg_write_pair fn "BOTAF_R" (rtos *BOTAF_FILLET_R* 2 6))
+      (_bota_cfg_write_pair fn "BOTAF_SEG" (rtos *BOTAF_FILLET_SEG* 2 6))
+      (setq ranges *BOTAF_AUTO_RANGES*)
+      (setq i 1)
+      (foreach range ranges
+        (_bota_cfg_write_pair
+          fn
+          (strcat "BOTAF_RANGE_" (itoa i))
+          (_bota_cfg_range_to_text range)
+        )
+        (setq i (1+ i))
+      )
+      (_bota_cfg_write_pair fn "JOIN_CAB" (if *BOTA_CONECTAR_CAB* "1" "0"))
+      (_bota_cfg_write_pair fn "CUT_CIRCLE" (if *BOTA_CORTAR_CIRCULO* "1" "0"))
+      (close fn)
+      T
+    )
+    nil
+  )
+)
+
+(defun _bota_cfg_values_from_file (path / fn header line pos key value data ranges values)
+  (setq fn (open path "r"))
+  (if fn
+    (progn
+      (setq header (read-line fn))
+      (if (= header "BOTA_CONFIG_V1")
+        (progn
+          (setq data nil)
+          (while (setq line (read-line fn))
+            (setq pos (vl-string-search "=" line))
+            (if (and pos (> pos 0))
+              (progn
+                (setq key (strcase (vl-string-trim " \t" (substr line 1 pos))))
+                (setq value (vl-string-trim " \t" (substr line (+ pos 2))))
+                (setq data (cons (cons key value) data))
+              )
+            )
+          )
+          (close fn)
+          (setq ranges
+            (list
+              (_bota_cfg_range_from_text (_bota_cfg_value data "BOTAF_RANGE_1"))
+              (_bota_cfg_range_from_text (_bota_cfg_value data "BOTAF_RANGE_2"))
+              (_bota_cfg_range_from_text (_bota_cfg_value data "BOTAF_RANGE_3"))
+              (_bota_cfg_range_from_text (_bota_cfg_value data "BOTAF_RANGE_4"))
+            )
+          )
+          (setq values
+            (list
+              (_bota_cfg_number (_bota_cfg_value data "RGIRO"))
+              (_bota_cfg_number (_bota_cfg_value data "IMPL"))
+              (_bota_cfg_number (_bota_cfg_value data "DISTSEG"))
+              (_bota_cfg_number (_bota_cfg_value data "SEGURIDAD"))
+              (_bota_cfg_number (_bota_cfg_value data "FILLET_R"))
+              (_bota_cfg_number (_bota_cfg_value data "FILLET_SEG"))
+              (_bota_cfg_number (_bota_cfg_value data "BOTAF_R"))
+              (_bota_cfg_number (_bota_cfg_value data "BOTAF_SEG"))
+              ranges
+              (_bota_cfg_number (_bota_cfg_value data "JOIN_CAB"))
+              (_bota_cfg_number (_bota_cfg_value data "CUT_CIRCLE"))
+            )
+          )
+          (if (_bota_cfg_values_valid_p values)
+            values
+            nil
+          )
+        )
+        (progn
+          (close fn)
+          nil
+        )
+      )
+    )
+    nil
+  )
+)
+
+(defun _bota_cfg_save_interactive (/ path)
+  (setq path
+    (getfiled
+      "Salvar configuracao BOTA"
+      (_bota_cfg_default_file)
+      "txt"
+      1
+    )
+  )
+  (if path
+    (if (_bota_cfg_save_file path)
+      (prompt (strcat "\nConfiguracao BOTA salva em: " path))
+      (alert "Nao foi possivel salvar o arquivo de configuracao.")
+    )
+  )
+)
+
+(defun _bota_cfg_load_interactive (/ path values)
+  (setq path
+    (getfiled
+      "Carregar configuracao BOTA"
+      (_bota_cfg_default_file)
+      "txt"
+      0
+    )
+  )
+  (if path
+    (progn
+      (setq values (_bota_cfg_values_from_file path))
+      (if values
+        (progn
+          (_bota_cfg_apply_values values)
+          (prompt (strcat "\nConfiguracao BOTA carregada de: " path))
+          T
+        )
+        (alert "Arquivo invalido, incompleto ou de versao nao suportada. As configuracoes atuais foram mantidas.")
+      )
+    )
+    nil
+  )
+)
+
+(defun _bota_cfg_dcl_commit_action (status)
+  (strcat
+    "(progn "
+    "(setq _bota_dcl_values (list "
+    "(atof (get_tile \"rGiro\")) "
+    "(atof (get_tile \"tamImpl\")) "
+    "(atof (get_tile \"distSeg\")) "
+    "(atof (get_tile \"seguridad\")) "
+    "(atof (get_tile \"filletR\")) "
+    "(atof (get_tile \"filletSeg\")) "
+    "(atof (get_tile \"botafR\")) "
+    "(atof (get_tile \"botafSeg\")) "
+    "(_bota_botaf_ranges_from_dcl) "
+    "(if (= (get_tile \"joinCab\") \"1\") 1.0 0.0) "
+    "(if (= (get_tile \"cutCircle\") \"1\") 1.0 0.0))) "
+    "(if (_bota_cfg_values_valid_p _bota_dcl_values) "
+    "(progn (_bota_cfg_apply_values _bota_dcl_values) (done_dialog "
+    (itoa status)
+    ")) "
+    "(alert \"Informe valores validos. As faixas devem estar entre 0 e 180 graus, sem sobreposicao, e ter raio e segmento maiores que zero.\"))"
+    ")"
+  )
+)
+
+(defun _bota_show_dcl (/ dclFile fn dclId status keepOpen _bota_dcl_values i range)
   (vl-load-com)
   (setq dclFile (vl-filename-mktemp "bota_cfg" nil ".dcl"))
   (setq fn (open dclFile "w"))
@@ -655,6 +703,10 @@
       (write-line "    }" fn)
       (write-line "    : spacer { height = 1; }" fn)
       (write-line "    : row {" fn)
+      (write-line "      : button { label = \"Salvar arquivo\"; key = \"saveFile\"; width = 16; }" fn)
+      (write-line "      : button { label = \"Carregar arquivo\"; key = \"loadFile\"; width = 16; }" fn)
+      (write-line "    }" fn)
+      (write-line "    : row {" fn)
       (write-line "      : button { label = \"Salvar / Aceitar\"; key = \"accept\"; is_default = true; width = 16; }" fn)
       (write-line "      : button { label = \"Cancelar\"; key = \"cancel\"; is_cancel = true; width = 16; }" fn)
       (write-line "    }" fn)
@@ -663,95 +715,61 @@
       (close fn)
 
       (setq dclId (load_dialog dclFile))
-      (if (new_dialog "bota_config_dialog" dclId)
-        (progn
-          (set_tile "rGiro"     (rtos *BOTA_RGIRO* 2 3))
-          (set_tile "tamImpl"   (rtos *BOTA_IMPL* 2 3))
-          (set_tile "distSeg"   (rtos *BOTA_DISTSEG* 2 3))
-          (set_tile "seguridad" (rtos *BOTA_SEGURIDAD* 2 3))
-          (set_tile "filletR"   (rtos *BOTA_FILLET_R* 2 3))
-          (set_tile "filletSeg" (rtos *BOTA_FILLET_SEG* 2 3))
-           (set_tile "botafR"    (rtos *BOTAF_FILLET_R* 2 3))
-           (set_tile "botafSeg"  (rtos *BOTAF_FILLET_SEG* 2 3))
-           (setq i 1)
-           (foreach range *BOTAF_AUTO_RANGES*
-             (set_tile (strcat "botafA" (itoa i) "Min") (rtos (car range) 2 3))
-             (set_tile (strcat "botafA" (itoa i) "Max") (rtos (cadr range) 2 3))
-             (set_tile (strcat "botafA" (itoa i) "Rad") (rtos (caddr range) 2 3))
-             (set_tile (strcat "botafA" (itoa i) "Seg") (rtos (nth 3 range) 2 3))
-             (setq i (1+ i))
-           )
-           (set_tile "joinCab"    (if *BOTA_CONECTAR_CAB* "1" "0"))
-           (set_tile "cutCircle"  (if *BOTA_CORTAR_CIRCULO* "1" "0"))
+      (setq keepOpen T)
+      (while keepOpen
+        (if (new_dialog "bota_config_dialog" dclId)
+          (progn
+            (set_tile "rGiro"     (rtos *BOTA_RGIRO* 2 3))
+            (set_tile "tamImpl"   (rtos *BOTA_IMPL* 2 3))
+            (set_tile "distSeg"   (rtos *BOTA_DISTSEG* 2 3))
+            (set_tile "seguridad" (rtos *BOTA_SEGURIDAD* 2 3))
+            (set_tile "filletR"   (rtos *BOTA_FILLET_R* 2 3))
+            (set_tile "filletSeg" (rtos *BOTA_FILLET_SEG* 2 3))
+            (set_tile "botafR"    (rtos *BOTAF_FILLET_R* 2 3))
+            (set_tile "botafSeg"  (rtos *BOTAF_FILLET_SEG* 2 3))
+            (setq i 1)
+            (foreach range *BOTAF_AUTO_RANGES*
+              (set_tile (strcat "botafA" (itoa i) "Min") (rtos (car range) 2 3))
+              (set_tile (strcat "botafA" (itoa i) "Max") (rtos (cadr range) 2 3))
+              (set_tile (strcat "botafA" (itoa i) "Rad") (rtos (caddr range) 2 3))
+              (set_tile (strcat "botafA" (itoa i) "Seg") (rtos (nth 3 range) 2 3))
+              (setq i (1+ i))
+            )
+            (set_tile "joinCab" (if *BOTA_CONECTAR_CAB* "1" "0"))
+            (set_tile "cutCircle" (if *BOTA_CORTAR_CIRCULO* "1" "0"))
 
-          (action_tile "accept"
-            "(progn
-               (setq _v_rGiro     (atof (get_tile \"rGiro\")))
-               (setq _v_tamImpl   (atof (get_tile \"tamImpl\")))
-               (setq _v_distSeg   (atof (get_tile \"distSeg\")))
-               (setq _v_seguridad (atof (get_tile \"seguridad\")))
-               (setq _v_filletR   (atof (get_tile \"filletR\")))
-               (setq _v_filletSeg (atof (get_tile \"filletSeg\")))
-                (setq _v_botafR    (atof (get_tile \"botafR\")))
-                (setq _v_botafSeg  (atof (get_tile \"botafSeg\")))
-                (setq _v_botafRanges (_bota_botaf_ranges_from_dcl))
-                (setq _v_joinCab   (= (get_tile \"joinCab\") \"1\"))
-                (setq _v_cutCircle (= (get_tile \"cutCircle\") \"1\"))
-               (if (and (> _v_rGiro 0.0)
-                        (> _v_tamImpl 0.0)
-                        (> _v_distSeg 0.0)
-                        (>= _v_seguridad 0.0)
-                        (> _v_filletR 0.0)
-                         (> _v_filletSeg 0.0)
-                         (> _v_botafR 0.0)
-                         (> _v_botafSeg 0.0)
-                         (_bota_botaf_ranges_valid_p _v_botafRanges))
-                 (progn
-                   (setq *BOTA_RGIRO*     _v_rGiro)
-                   (setq *BOTA_IMPL*      _v_tamImpl)
-                   (setq *BOTA_DISTSEG*   _v_distSeg)
-                   (setq *BOTA_SEGURIDAD* _v_seguridad)
-                   (setq *BOTA_FILLET_R*   _v_filletR)
-                   (setq *BOTA_FILLET_SEG* _v_filletSeg)
-                    (setq *BOTAF_FILLET_R*   _v_botafR)
-                    (setq *BOTAF_FILLET_SEG* _v_botafSeg)
-                    (setq *BOTAF_AUTO_RANGES* _v_botafRanges)
-                    (setq *BOTA_CONECTAR_CAB* _v_joinCab)
-                    (setq *BOTA_CORTAR_CIRCULO* _v_cutCircle)
-                    (setq *BOTA_CONECTAR_CAB_CONFIGURADO* T)
-                    (setq *BOTA_CORTAR_CIRCULO_CONFIGURADO* T)
-                   (done_dialog 1)
-                 )
-                  (alert \"Informe valores validos. As faixas devem estar entre 0 e 180 graus, sem sobreposicao, e ter raio e segmento maiores que zero.\")
-               )
-             )"
-          )
+            (action_tile "accept" (_bota_cfg_dcl_commit_action 1))
+            (action_tile "saveFile" (_bota_cfg_dcl_commit_action 2))
+            (action_tile "loadFile" "(done_dialog 3)")
+            (action_tile "cancel" "(done_dialog 0)")
 
-          (action_tile "cancel" "(done_dialog 0)")
-
-          (setq status (start_dialog))
-          (unload_dialog dclId)
-          (vl-file-delete dclFile)
-          (if (= status 1)
-            (prompt
-              (strcat
-                "\nParametros BOTA atualizados: Conectar cabeceira="
-                (if *BOTA_CONECTAR_CAB* "Sim" "Nao")
-                " | Cortar circulo="
-                (if *BOTA_CORTAR_CIRCULO* "Sim" "Nao")
-                "."
+            (setq status (start_dialog))
+            (if (= status 1)
+              (prompt
+                (strcat
+                  "\nParametros BOTA atualizados: Conectar cabeceira="
+                  (if *BOTA_CONECTAR_CAB* "Sim" "Nao")
+                  " | Cortar circulo="
+                  (if *BOTA_CORTAR_CIRCULO* "Sim" "Nao")
+                  "."
+                )
               )
             )
+            (if (= status 2) (_bota_cfg_save_interactive))
+            (if (= status 3) (_bota_cfg_load_interactive))
+            (if (and (/= status 2) (/= status 3))
+              (setq keepOpen nil)
+            )
           )
-          status
-        )
-        (progn
-          (unload_dialog dclId)
-          (vl-file-delete dclFile)
-          (prompt "\nErro ao abrir a janela de dialogo DCL.")
-          nil
+          (progn
+            (prompt "\nErro ao abrir a janela de dialogo DCL.")
+            (setq keepOpen nil)
+          )
         )
       )
+      (unload_dialog dclId)
+      (vl-file-delete dclFile)
+      status
     )
     nil
   )
@@ -791,7 +809,7 @@
       (write-line "        : text_part { label = \"BOTAX - BOTA2 com ponto manual para definir o lado do giro.\"; }" fn)
       (write-line "        : text_part { label = \"BOTA3 - Manobra por linha guia com fillet automatico.\"; }" fn)
       (write-line "        : text_part { label = \"BOTAF - Fillet automatico entre cabeceira e linha, convertido em segmentos.\"; }" fn)
-      (write-line "        : text_part { label = \"BOTAC - Abre a janela de configuracao de parametros.\"; }" fn)
+      (write-line "        : text_part { label = \"BOTAC - Configura e salva/carrega perfis de parametros.\"; }" fn)
       (write-line "        : text_part { label = \"BOTAH - Mostra esta janela de ajuda.\"; }" fn)
       (write-line "      }" fn)
       (write-line "    }" fn)
@@ -1836,45 +1854,9 @@
 ;; Maniobra usando cabecera y linea de guiado
 ;; ============================================================
 
-  (defun c:BOTA2 (/ *error* oldLuprec cfg sel ent guia pPick pCab pGuiaPick pSide pJoint manualSideMode
-                  offsetData usedVirtual
-                  rGiro tamImpl seguridad rBarra distSeg offCabDist offGuiaDist
-                  offCab offGuia offCentro tmpExtCircle pVert pCutRef
-                  pTang centro nSegGiro giroData entGiro entBarra ptsGiro
-                  pGapIni pGapFin lastBefore lastAfter entCab2 entCabJoin joinOk)
-
-  (vl-load-com)
-
-  (setq manualSideMode
-    (and (boundp '*BOTA2_MANUAL_SIDE_MODE*) *BOTA2_MANUAL_SIDE_MODE*)
-  )
-  ;; BOTAX consome esta marca uma unica vez, inclusive quando BOTA2 termina
-  ;; por cancelamento ou erro.
-  (setq *BOTA2_MANUAL_SIDE_MODE* nil)
-
-  ;; -------------------------
-  ;; Restaurar variables
-  ;; -------------------------
-
-  (defun b2_restore ()
-    (if oldLuprec
-      (setvar "LUPREC" oldLuprec)
-    )
-  )
-
-  (defun *error* (msg)
-    (b2_clear_temporaries)
-    (b2_restore)
-    (setq *BOTA2_MANUAL_SIDE_MODE* nil)
-    (if (and msg (/= msg "Function cancelled") (/= msg "quit / exit abort"))
-      (prompt (strcat "\nErro: " msg))
-    )
-    (princ)
-  )
-
-  ;; -------------------------
-  ;; Funciones auxiliares
-  ;; -------------------------
+(defun _bota2_define_helpers ()
+  ;; BOTA2 e BOTA2DEBUG inicializam o mesmo calculo. O estado temporario
+  ;; pertence ao comando chamador, inclusive durante erros dentro dos helpers.
 
   (defun b2_pt3 (p)
     (list (car p) (cadr p) 0.0)
@@ -2093,18 +2075,9 @@
   )
 
   (defun b2_closest_point (e pt / p)
-    ;; Punto real mas cercano de una curva a pt.
     (setq p
-      (vl-catch-all-apply
-        'vlax-curve-getClosestPointTo
-        (list e pt)
-      )
-    )
-
-    (if (vl-catch-all-error-p p)
-      nil
-      (b2_pt3 p)
-    )
+      (vl-catch-all-apply 'vlax-curve-getClosestPointTo (list e pt)))
+    (if (or (not p) (vl-catch-all-error-p p)) nil (b2_pt3 p))
   )
 
   (defun b2_connect_points (p1 p2 color)
@@ -2150,7 +2123,21 @@
     )
   )
 
-  (defun b2_clear_temporaries ()
+  (defun b2_track_temp (e)
+    (if e (setq b2Temps (cons e b2Temps)))
+    e
+  )
+
+  (defun b2_clear_temporaries (/ e)
+    (if (and b2Original (not b2Committed) (not (entget b2Original)))
+      (vl-catch-all-apply 'entdel (list b2Original))
+    )
+    (foreach e b2Temps
+      (if (not (and b2Committed (member e b2Outputs)))
+        (b2_delete_ent e)
+      )
+    )
+    (setq b2Temps nil)
     (if (and offCab (entget offCab))
       (b2_delete_ent offCab)
     )
@@ -2163,10 +2150,18 @@
     (if (and tmpExtCircle (entget tmpExtCircle))
       (b2_delete_ent tmpExtCircle)
     )
+    (if (and guiaLocal (entget guiaLocal))
+      (b2_delete_ent guiaLocal)
+    )
+    (if (and cabLocal (entget cabLocal))
+      (b2_delete_ent cabLocal)
+    )
     (setq offCab nil)
     (setq offGuia nil)
     (setq offCentro nil)
     (setq tmpExtCircle nil)
+    (setq guiaLocal nil)
+    (setq cabLocal nil)
   )
 
   (defun b2_offset_all (e dist / obj res out en)
@@ -2180,7 +2175,10 @@
           )
         )
         (if (vl-catch-all-error-p res)
-          nil
+          (progn
+            (setq offsetComError (vl-catch-all-error-message res))
+            nil
+          )
           (progn
             (if (= (type res) 'VARIANT)
               (setq res (vlax-variant-value res))
@@ -2201,7 +2199,7 @@
                 )
               )
               (if (not (vl-catch-all-error-p en))
-                (setq out (cons en out))
+                (setq out (cons (b2_track_temp en) out))
               )
             )
             (reverse out)
@@ -2227,62 +2225,6 @@
         )
       )
       1e99
-    )
-  )
-
-  (defun b2_delete_ents_except (ents keep / en)
-    (foreach en ents
-      (if (and en (/= en keep))
-        (b2_delete_ent en)
-      )
-    )
-  )
-
-  (defun b2_offset_pick_by_side (e ents pSide sameSide / best bestScore bestDist score dist)
-    ;; sameSide=T selecciona el offset del mismo lado que pSide.
-    ;; sameSide=nil selecciona el offset del lado contrario.
-    (if (not ents)
-      nil
-      (if (= (length ents) 1)
-        (progn
-          (setq score (b2_offset_side_score e (car ents) pSide))
-          (if (if sameSide (> score 1e-9) (< score -1e-9))
-            (car ents)
-            nil
-          )
-        )
-        (progn
-          (setq best nil)
-          (setq bestScore nil)
-          (setq bestDist nil)
-
-          (foreach en ents
-            (setq score (b2_offset_side_score e en pSide))
-            (setq dist  (b2_dist_to_ent en pSide))
-            (if
-              (or
-                (not best)
-                (if sameSide
-                  (or (> score bestScore)
-                      (and (equal score bestScore 1e-9) (< dist bestDist)))
-                  (or (< score bestScore)
-                      (and (equal score bestScore 1e-9) (> dist bestDist)))
-                )
-              )
-              (progn
-                (setq best en)
-                (setq bestScore score)
-                (setq bestDist dist)
-              )
-            )
-          )
-
-          (if (and best (if sameSide (> bestScore 1e-9) (< bestScore -1e-9)))
-            best
-            nil
-          )
-        )
-      )
     )
   )
 
@@ -2321,37 +2263,6 @@
     )
   )
 
-  (defun b2_offset_select (e dist pSide / ents keep)
-    ;; Crea offset positivo y negativo.
-    ;; En v5, pSide es la zona indicada por el usuario para la salida/corte.
-    ;; Mantiene el offset del mismo lado de esa zona.
-
-    (setq ents
-      (append
-        (b2_offset_all e dist)
-        (b2_offset_all e (- dist))
-      )
-    )
-    (setq keep (b2_offset_pick_by_side e ents pSide T))
-    (b2_delete_ents_except ents keep)
-    keep
-  )
-
-  (defun b2_offset_select_opposite (e dist pSide / ents keep)
-    ;; Crea offset positivo y negativo.
-    ;; Mantiene el offset del lado contrario a la zona indicada.
-
-    (setq ents
-      (append
-        (b2_offset_all e dist)
-        (b2_offset_all e (- dist))
-      )
-    )
-    (setq keep (b2_offset_pick_by_side e ents pSide nil))
-    (b2_delete_ents_except ents keep)
-    keep
-  )
-
   (defun b2_triplets (lst / out)
     (setq out nil)
     (while (and lst (caddr lst))
@@ -2366,63 +2277,25 @@
     (reverse out)
   )
 
-  (defun b2_cross2 (a b)
-    (- (* (car a) (cadr b)) (* (cadr a) (car b)))
-  )
-
-  (defun b2_segment_intersection (a b c d / r s den q tParam uParam)
-    ;; Intersecao de segmentos finitos, sem prolongar as entidades.
-    (setq r   (b2_v- b a))
-    (setq s   (b2_v- d c))
-    (setq den (b2_cross2 r s))
-    (if (< (abs den) 1e-10)
-      nil
-      (progn
-        (setq q      (b2_v- c a))
-        (setq tParam (/ (b2_cross2 q s) den))
-        (setq uParam (/ (b2_cross2 q r) den))
-        (if (and (>= tParam -1e-8) (<= tParam (+ 1.0 1e-8))
-                 (>= uParam -1e-8) (<= uParam (+ 1.0 1e-8)))
-          (b2_v+ a (b2_v* tParam r))
-          nil
-        )
-      )
-    )
-  )
-
-  (defun b2_curve_segments (e / endParam i p1 p2 out)
-    ;; Offsets locais sao polilinhas; percorre seus segmentos reais.
-    (setq endParam
-      (vl-catch-all-apply 'vlax-curve-getEndParam (list e))
-    )
-    (setq out nil)
-    (if (not (vl-catch-all-error-p endParam))
-      (progn
-        (setq i 0)
-        (while (< i endParam)
-          (setq p1
-            (vl-catch-all-apply 'vlax-curve-getPointAtParam (list e i))
-          )
-          (setq p2
-            (vl-catch-all-apply 'vlax-curve-getPointAtParam (list e (1+ i)))
-          )
-          (if (and (not (vl-catch-all-error-p p1))
-                   (not (vl-catch-all-error-p p2)))
-            (setq out (cons (list (b2_pt3 p1) (b2_pt3 p2)) out))
-          )
-          (setq i (1+ i))
-        )
-      )
-    )
-    (reverse out)
-  )
-
-  (defun b2_intersections_fallback (e1 e2 / pts s1 s2 p)
+  (defun b2_endpoint_contacts (e1 e2 / pts pair p q)
+    ;; Reserva de custo constante para pontas conectadas omitidas pelo COM.
+    ;; Projeta sobre a curva nativa: nunca substitui arcos por cordas.
     (setq pts nil)
-    (foreach s1 (b2_curve_segments e1)
-      (foreach s2 (b2_curve_segments e2)
-        (setq p (b2_segment_intersection (car s1) (cadr s1) (car s2) (cadr s2)))
-        (if p (setq pts (cons p pts)))
+    (foreach pair (list (list e1 e2) (list e2 e1))
+      (foreach p
+        (list
+          (vl-catch-all-apply 'vlax-curve-getStartPoint (list (car pair)))
+          (vl-catch-all-apply 'vlax-curve-getEndPoint (list (car pair)))
+        )
+        (if (and p (not (vl-catch-all-error-p p)))
+          (progn
+            (setq p (b2_pt3 p))
+            (setq q (b2_closest_point (cadr pair) p))
+            (if (and q (<= (distance p q) 1e-4))
+              (setq pts (cons p pts))
+            )
+          )
+        )
       )
     )
     pts
@@ -2476,19 +2349,26 @@
     best
   )
 
-  (defun b2_intersection_best (e1 e2 pref / pts)
+  (defun b2_intersection_best (e1 e2 pref / pts valid p)
     ;; IMPORTANTE:
     ;; Busca somente intersecao REAL entre os offsets.
     ;; Nao estende as entidades.
     ;; Se nao existir intersecao real, devolve nil.
 
     (setq pts (b2_intersections e1 e2 0))
-    (if (not pts)
-      (setq pts (b2_intersections_fallback e1 e2))
+    (setq valid nil)
+    (foreach p pts
+      (if (and (b2_point_on_curve_p e1 p 1e-4)
+               (b2_point_on_curve_p e2 p 1e-4))
+        (setq valid (cons p valid))
+      )
+    )
+    (if (not valid)
+      (setq valid (b2_endpoint_contacts e1 e2))
     )
 
-    (if pts
-      (b2_best_point pts pref)
+    (if valid
+      (b2_best_point valid pref)
       nil
     )
   )
@@ -2525,36 +2405,34 @@
     out
   )
 
-  (defun b2_signed_entries_for_sign (entries sign / out entry)
-    (setq out nil)
-    (foreach entry entries
-      (if (and entry (= (cadr entry) sign))
-        (setq out (cons entry out))
-      )
-    )
-    (reverse out)
-  )
-
-  (defun b2_signed_entry_by_distance (entries ref near / best bestD entry d)
-    ;; near=T escolhe o offset na direcao da referencia; near=nil escolhe
-    ;; o offset que se afasta dela.
+  (defun b2_signed_entry_by_side (entries eBase pSide sameSide / best bestScore bestDist entry score dist)
+    ;; Seleciona pelo lado geometrico do offset, nao pela distancia entre
+    ;; curvas. Isso preserva a regra mesmo quando os tramos sao paralelos.
     (setq best nil)
-    (setq bestD nil)
+    (setq bestScore nil)
+    (setq bestDist nil)
     (foreach entry entries
       (if (and entry (car entry) (entget (car entry)))
         (progn
-          (setq d (b2_dist_to_ent (car entry) ref))
+          (setq score (b2_offset_side_score eBase (car entry) pSide))
+          (setq dist (b2_dist_to_ent (car entry) pSide))
           (if (or (not best)
-                  (if near (< d bestD) (> d bestD)))
+                  (if sameSide
+                    (or (> score bestScore)
+                        (and (equal score bestScore 1e-9) (< dist bestDist)))
+                    (or (< score bestScore)
+                        (and (equal score bestScore 1e-9) (> dist bestDist)))
+                  ))
             (progn
               (setq best entry)
-              (setq bestD d)
+              (setq bestScore score)
+              (setq bestDist dist)
             )
           )
         )
       )
     )
-    best
+    (if (and best (if sameSide (> bestScore 1e-9) (< bestScore -1e-9))) best nil)
   )
 
   (defun b2_delete_signed_entries_except (entries keep / entry)
@@ -2576,7 +2454,7 @@
             (setq en
               (vl-catch-all-apply 'vlax-vla-object->ename (list copy))
             )
-            (if (vl-catch-all-error-p en) nil en)
+            (if (vl-catch-all-error-p en) nil (b2_track_temp en))
           )
         )
       )
@@ -2584,41 +2462,213 @@
     )
   )
 
-  (defun b2_extend_copy_to_boundary (e boundary pTarget / pStart pEnd pPick oldCmd res)
-    ;; EXTEND atua somente na copia da guia. A distancia nao e limitada porque
-    ;; essa geometria serve apenas para identificar o sinal do offset.
-    (setq pStart
-      (vl-catch-all-apply 'vlax-curve-getStartPoint (list e))
+  (defun b2_point_on_curve_p (e p tol / q)
+    (setq q (b2_closest_point e p))
+    (and q (<= (distance q p) tol))
+  )
+
+  (defun b2_piece_matches_p (e p1 p2 expectedLength / a b total)
+    (setq a (vl-catch-all-apply 'vlax-curve-getStartPoint (list e)))
+    (setq b (vl-catch-all-apply 'vlax-curve-getEndPoint (list e)))
+    (setq total (b2_curve_total_length e))
+    (and a b total
+         (not (vl-catch-all-error-p a))
+         (not (vl-catch-all-error-p b))
+         (equal total expectedLength 1e-4)
+         (or (and (equal a p1 1e-4) (equal b p2 1e-4))
+             (and (equal b p1 1e-4) (equal a p2 1e-4))))
+  )
+
+  (defun b2_split_copy_at_point
+    (e pBreak / cutDist total pStart pEnd before after res valid)
+    ;; So recebe copias. Valida os dois tramos antes de aceitar o BREAK.
+    (setq cutDist (b2_curve_dist_at_point e pBreak))
+    (setq total (b2_curve_total_length e))
+    (if (and cutDist total (b2_point_on_curve_p e pBreak 1e-4))
+      (if (or (<= cutDist 1e-5) (<= (- total cutDist) 1e-5))
+        (list e)
+        (progn
+          (setq pStart (vlax-curve-getStartPoint e))
+          (setq pEnd (vlax-curve-getEndPoint e))
+          (setq before (entlast))
+          (setq res (b2_breakatpoint e pBreak))
+          (setq after (entlast))
+          (if (and after (/= after before))
+            (b2_track_temp after)
+          )
+          (setq valid
+            (and (not (vl-catch-all-error-p res))
+                 after (/= after before) (entget e) (entget after)
+                 (or
+                   (and (b2_piece_matches_p e pStart pBreak cutDist)
+                        (b2_piece_matches_p after pBreak pEnd (- total cutDist)))
+                   (and (b2_piece_matches_p after pStart pBreak cutDist)
+                        (b2_piece_matches_p e pBreak pEnd (- total cutDist)))))
+          )
+          (if valid
+            (list e after)
+            (progn
+              (b2_delete_ent e)
+              (if (and after (/= after before)) (b2_delete_ent after))
+              nil
+            )
+          )
+        )
+      )
+      (progn (b2_delete_ent e) nil)
     )
-    (setq pEnd
-      (vl-catch-all-apply 'vlax-curve-getEndPoint (list e))
+  )
+
+  (defun b2_break_copy_keep_toward
+    (e pBreak pRef / cutDist refDist total pStart pEnd parts keep wantedPoint wantedLength part)
+    ;; Mede a referencia ANTES do BREAK. O rumo inicial de uma curva nao
+    ;; identifica o ramo que contem o clique quando ela faz uma volta.
+    (setq cutDist (b2_curve_dist_at_point e pBreak))
+    (setq refDist (b2_curve_dist_at_point e pRef))
+    (setq total (b2_curve_total_length e))
+    (if (and cutDist refDist total (b2_point_on_curve_p e pBreak 1e-4))
+      (if (or (<= cutDist 1e-5) (<= (- total cutDist) 1e-5))
+        e
+        (if (equal cutDist refDist 1e-5)
+          (progn (b2_delete_ent e) nil)
+          (progn
+            (setq pStart (vlax-curve-getStartPoint e))
+            (setq pEnd (vlax-curve-getEndPoint e))
+            (if (< refDist cutDist)
+              (setq wantedPoint pStart wantedLength cutDist)
+              (setq wantedPoint pEnd wantedLength (- total cutDist))
+            )
+            (setq parts (b2_split_copy_at_point e pBreak))
+            (setq keep nil)
+            (foreach part parts
+              (if (b2_piece_matches_p part wantedPoint pBreak wantedLength)
+                (setq keep part)
+              )
+            )
+            (foreach part parts
+              (if (/= part keep) (b2_delete_ent part))
+            )
+            keep
+          )
+        )
+      )
+      (progn (b2_delete_ent e) nil)
     )
-    (if (or (vl-catch-all-error-p pStart)
-            (vl-catch-all-error-p pEnd)
-            (not boundary)
-            (not pTarget))
+  )
+
+  (defun b2_curve_total_length (e / endParam total)
+    ;; Comprimento real da curva, preservando arcos e bulges da polilinha.
+    (setq endParam
+      (vl-catch-all-apply 'vlax-curve-getEndParam (list e))
+    )
+    (if (vl-catch-all-error-p endParam)
       nil
       (progn
-        (setq pStart (b2_pt3 pStart))
-        (setq pEnd   (b2_pt3 pEnd))
-        (setq pPick
-          (if (<= (distance pTarget pStart) (distance pTarget pEnd))
-            pStart
-            pEnd
-          )
-        )
-        (setq oldCmd (getvar "CMDECHO"))
-        (setvar "CMDECHO" 0)
-        (setq res
+        (setq total
           (vl-catch-all-apply
-            'vl-cmdf
-            (list "_.EXTEND" boundary "" (list e pPick) "")
+            'vlax-curve-getDistAtParam
+            (list e endParam)
           )
         )
-        (setvar "CMDECHO" oldCmd)
-        (and (not (vl-catch-all-error-p res)) (entget e))
+        (if (vl-catch-all-error-p total) nil total)
       )
     )
+  )
+
+  (defun b2_guide_temp_segment
+    (e pJoint pGuideRef segLength / work total jointDist pLimit)
+    ;; Dois cortes nativos na copia, antes do OFFSET, a 1,5 x o implemento.
+    (setq work (b2_copy_entity e))
+    (if work
+      (setq work (b2_break_copy_keep_toward work pJoint pGuideRef))
+    )
+    (if work
+      (progn
+        (setq total (b2_curve_total_length work))
+        (setq jointDist (b2_curve_dist_at_point work pJoint))
+        (if (and total jointDist)
+          (if (> total (+ segLength 1e-5))
+            (progn
+              (setq pLimit
+                (vl-catch-all-apply 'vlax-curve-getPointAtDist
+                  (list work
+                    (if (<= jointDist 1e-5) segLength (- total segLength))
+                  )
+                )
+              )
+              (if (and pLimit (not (vl-catch-all-error-p pLimit)))
+                (setq work
+                  (b2_break_copy_keep_toward work (b2_pt3 pLimit) pJoint)
+                )
+                (progn (b2_delete_ent work) (setq work nil))
+              )
+            )
+          )
+          (progn (b2_delete_ent work) (setq work nil))
+        )
+      )
+    )
+    work
+  )
+
+  (defun b2_curve_dist_at_point (e p / q value)
+    (setq q (b2_closest_point e p))
+    (if q
+      (progn
+        (setq value
+          (vl-catch-all-apply
+            'vlax-curve-getDistAtPoint
+            (list e q)
+          )
+        )
+        (if (vl-catch-all-error-p value) nil value)
+      )
+      nil
+    )
+  )
+
+  (defun b2_header_temp_segment
+    (e pJoint segLength / work total jointDist pBefore pAfter)
+    ;; Conserva os arcos nativos dos dois lados da intersecao.
+    (setq work (b2_copy_entity e))
+    (if work
+      (progn
+        (setq total (b2_curve_total_length e))
+        (setq jointDist (b2_curve_dist_at_point e pJoint))
+        (if (and total jointDist)
+          (progn
+            (if (> jointDist (+ segLength 1e-5))
+              (progn
+                (setq pBefore
+                  (vl-catch-all-apply 'vlax-curve-getPointAtDist
+                    (list e (- jointDist segLength)))
+                )
+                (if (and pBefore (not (vl-catch-all-error-p pBefore)))
+                  (setq work
+                    (b2_break_copy_keep_toward work (b2_pt3 pBefore) pJoint))
+                  (progn (b2_delete_ent work) (setq work nil))
+                )
+              )
+            )
+            (if (and work (< jointDist (- total segLength 1e-5)))
+              (progn
+                (setq pAfter
+                  (vl-catch-all-apply 'vlax-curve-getPointAtDist
+                    (list e (+ jointDist segLength)))
+                )
+                (if (and pAfter (not (vl-catch-all-error-p pAfter)))
+                  (setq work
+                    (b2_break_copy_keep_toward work (b2_pt3 pAfter) pJoint))
+                  (progn (b2_delete_ent work) (setq work nil))
+                )
+              )
+            )
+          )
+          (progn (b2_delete_ent work) (setq work nil))
+        )
+      )
+    )
+    work
   )
 
   (defun b2_find_offset_intersection (offCab guideEntries pJoint allowVirtual
@@ -2672,171 +2722,106 @@
   )
 
   (defun b2_offset_select_toward (e dist ref / entries keep)
-    ;; Selecao direta para o centro: mantem o offset mais proximo da referencia.
+    ;; O centro obedece ao mesmo lado usado no offset inicial da cabecaria.
+    ;; Se apenas o lado contrario existir, retorna nil para a reserva local.
     (setq entries (b2_offset_candidates_signed e dist))
-    (setq keep (b2_signed_entry_by_distance entries ref T))
+    (setq keep (b2_signed_entry_by_side entries e ref T))
     (b2_delete_signed_entries_except entries (if keep (car keep) nil))
     (if keep (car keep) nil)
   )
 
   (defun b2_offset_pair_for_maneuver
-    (eCab eGuia distCab distGuia pCabRef pGuideRef pJoint
-     / cabEntries guideEntries cabEntry cabOppEntries cabOppEntry guideEntry
-       primary tempGuide pExtend tempEntries tempMatch finalSign finalEntries
-       finalMatch finalEntry)
-    ;; Fluxo normal: cabeceira para a guia e guia afastando-se da cabeceira.
-    ;; Reserva: a copia da guia e estendida ate o offset oposto da cabeceira
-    ;; para descobrir o sinal de Offset que deve ser aplicado na guia real.
-    (setq cabEntries (b2_offset_candidates_signed eCab distCab))
-    (setq guideEntries (b2_offset_candidates_signed eGuia distGuia))
-    (setq cabEntry (b2_signed_entry_by_distance cabEntries pGuideRef T))
-    (setq guideEntry (b2_signed_entry_by_distance guideEntries pCabRef nil))
-
-    (setq primary
-      (if (and cabEntry guideEntry)
-        (b2_find_offset_intersection
-          (car cabEntry) (list guideEntry) pJoint nil
+    (eCab eGuia distCab distGuia pCabRef pGuideRef pJoint cabWindow
+     / cabEntries guideEntries cabEntry guideEntry match cabBase cabWork)
+    ;; Cabecaria no lado da guia; guia no lado oposto ao clique da cabecaria.
+    (setq offsetError nil offsetComError nil cabBase eCab)
+    (setq cabEntries (b2_offset_candidates_signed cabBase distCab))
+    (setq cabEntry (b2_signed_entry_by_side cabEntries cabBase pGuideRef T))
+    (if (not cabEntry)
+      (progn
+        (b2_delete_signed_entries_except cabEntries nil)
+        (setq cabEntries nil)
+        (setq cabWork (b2_header_temp_segment eCab pJoint cabWindow))
+        (if cabWork
+          (progn
+            (setq cabBase cabWork offsetComError nil)
+            (setq cabEntries (b2_offset_candidates_signed cabBase distCab))
+            (setq cabEntry
+              (b2_signed_entry_by_side cabEntries cabBase pGuideRef T))
+          )
         )
-        nil
+        (if (not cabEntry)
+          (setq offsetError
+            (strcat
+              "Nao foi possivel criar o offset da cabeceira no lado do clique da guia."
+              (if offsetComError (strcat " Civil 3D: " offsetComError) "")))
+        )
       )
     )
-
-    (if primary
+    (if cabEntry
       (progn
-        (setq finalEntry (car primary))
-        (b2_delete_signed_entries_except cabEntries (car cabEntry))
-        (b2_delete_signed_entries_except guideEntries (car finalEntry))
-        (list (car cabEntry) (car finalEntry) (cadr primary) nil)
-      )
-      (progn
-        ;; Os candidatos normais da guia nao serviram. A copia temporaria
-        ;; identifica o sinal correto sem tocar na guia do desenho.
-        (b2_delete_signed_entries_except guideEntries nil)
-        (setq guideEntries nil)
-        (setq finalMatch nil)
-        (if cabEntry
-          (progn
-            (setq cabOppEntries
-              (b2_signed_entries_for_sign cabEntries (- (cadr cabEntry)))
-            )
-            (setq cabOppEntry
-              (b2_signed_entry_by_distance cabOppEntries pGuideRef T)
-            )
-            (if cabOppEntry
-              (progn
-                (setq tempGuide (b2_copy_entity eGuia))
-                (if tempGuide
-                  (progn
-                    (setq pExtend
-                      (b2_intersection_extended_best
-                        tempGuide (car cabOppEntry) pJoint
-                      )
-                    )
-                    (if (and pExtend
-                             (b2_extend_copy_to_boundary
-                               tempGuide (car cabOppEntry) pExtend
-                             )
-                             (b2_intersection_best
-                               tempGuide (car cabOppEntry) pJoint
-                             ))
-                      (progn
-                        (setq tempEntries
-                          (b2_offset_candidates_signed tempGuide distGuia)
-                        )
-                        (setq tempMatch
-                          (b2_find_offset_intersection
-                            (car cabEntry) tempEntries pJoint nil
-                          )
-                        )
-                        (if tempMatch
-                          (progn
-                            (setq finalSign (cadr (car tempMatch)))
-                            (setq finalEntries
-                              (b2_signed_entries_for_sign
-                                (b2_offset_candidates_signed eGuia distGuia)
-                                finalSign
-                              )
-                            )
-                            (setq finalMatch
-                              (b2_find_offset_intersection
-                                (car cabEntry) finalEntries pJoint T
-                              )
-                            )
-                          )
-                        )
-                      )
-                    )
-                  )
-                )
-              )
-            )
-          )
+        (setq guideEntries (b2_offset_candidates_signed eGuia distGuia))
+        (setq guideEntry
+          (b2_signed_entry_by_side guideEntries eGuia pCabRef nil))
+        (if (not guideEntry)
+          (setq offsetError
+            "Nao foi possivel criar o offset da guia no lado oposto ao clique da cabeceira.")
         )
+      )
+    )
+    (if (and cabEntry guideEntry)
+      (progn
+        (setq match
+          (b2_find_offset_intersection (car cabEntry) (list guideEntry) pJoint T))
+        (if (not match)
+          (setq offsetError
+            "Os offsets selecionados nao se intersectam; a extensao virtual de 1.000 m tambem nao encontrou solucao.")
+        )
+      )
+    )
+    (b2_delete_signed_entries_except cabEntries (if cabEntry (car cabEntry) nil))
+    (b2_delete_signed_entries_except guideEntries (if guideEntry (car guideEntry) nil))
+    ;; Mesmo sem intersecao, o debug pode mostrar exatamente os offsets que
+    ;; o comando selecionou. Somente um ponto valido autoriza a manobra.
+    (if (or cabEntry guideEntry)
+      (list (car cabEntry) (car guideEntry) (cadr match) (caddr match) cabWork)
+      nil
+    )
+  )
 
-        (b2_delete_signed_entries_except tempEntries nil)
-        (if tempGuide (b2_delete_ent tempGuide))
-
-        (if finalMatch
+  (defun b2_prepare_offsets
+    (eCab eGuide pCabRef pGuideRef impl safety / joint work data)
+    ;; Entrada unica do solver para BOTA2, BOTAX e BOTA2DEBUG.
+    (setq offsetError nil offsetComError nil)
+    (setq joint (b2_reference_intersection eCab eGuide pCabRef))
+    (if joint
+      (progn
+        (setq work (b2_guide_temp_segment eGuide joint pGuideRef (* 1.5 impl)))
+        (if work
           (progn
-            (setq finalEntry (car finalMatch))
-            (b2_delete_signed_entries_except cabEntries (car cabEntry))
-            (b2_delete_signed_entries_except finalEntries (car finalEntry))
-            (list
-              (car cabEntry)
-              (car finalEntry)
-              (cadr finalMatch)
-              (caddr finalMatch)
-            )
+            (setq data
+              (b2_offset_pair_for_maneuver
+                eCab work (/ impl 2.0) (+ (/ impl 2.0) safety)
+                ;; Reserva da cabecaria: 2 x implemento em cada lado.
+                pCabRef pGuideRef joint (* 2.0 impl)))
+            (if data (append data (list joint)) nil)
           )
           (progn
-            (b2_delete_signed_entries_except cabEntries nil)
-            (b2_delete_signed_entries_except finalEntries nil)
+            (setq offsetError "Nao foi possivel criar o tramo temporario da linha guia.")
             nil
           )
         )
       )
-    )
-  )
-
-  (defun b2_reference_intersection (e1 e2 pref / p p1 a b q pts)
-    ;; Intersecao real entre referencias. Se o ActiveX nao informar um toque
-    ;; de extremo, reconhece a ponta que ja esta sobre a outra curva.
-    (setq p1 (b2_intersection_best e1 e2 pref))
-    (if p1
-      p1
       (progn
-        (setq pts nil)
-        (setq a (vl-catch-all-apply 'vlax-curve-getStartPoint (list e1)))
-        (setq b (vl-catch-all-apply 'vlax-curve-getEndPoint (list e1)))
-        (foreach p (list a b)
-          (if (and p (not (vl-catch-all-error-p p)))
-            (progn
-              (setq p (b2_pt3 p))
-              (setq q (b2_closest_point e2 p))
-              (if (and q (<= (distance p q) 1e-4))
-                (setq pts (cons q pts))
-              )
-            )
-          )
-        )
-        (setq a (vl-catch-all-apply 'vlax-curve-getStartPoint (list e2)))
-        (setq b (vl-catch-all-apply 'vlax-curve-getEndPoint (list e2)))
-        (foreach p (list a b)
-          (if (and p (not (vl-catch-all-error-p p)))
-            (progn
-              (setq p (b2_pt3 p))
-              (setq q (b2_closest_point e1 p))
-              (if (and q (<= (distance p q) 1e-4))
-                (setq pts (cons q pts))
-              )
-            )
-          )
-        )
-        (if pts (b2_best_point pts pref) nil)
+        (setq offsetError "Nao foi encontrada intersecao real entre a cabeceira e a linha guia.")
+        nil
       )
     )
   )
 
+  (defun b2_reference_intersection (e1 e2 pref)
+    (b2_intersection_best e1 e2 pref)
+  )
 
   (defun b2_breakatpoint (e pt / oldCmd pObj res)
     (if e
@@ -3087,150 +3072,163 @@
     )
   )
 
-  (defun b2_run_simple ()
-    ;; Fluxo direto: intersecao real -> offsets com a guia inteira -> BREAK
-    ;; da cabeceira na tangencia. BOTA2 nao conecta o circulo a guia.
-    (setq rBarra      (+ rGiro (/ tamImpl 2.0)))
-    (setq offCabDist  (/ tamImpl 2.0))
-    (setq offGuiaDist (+ (/ tamImpl 2.0) seguridad))
-    (b2_clear_temporaries)
-
-    ;; A intersecao original e somente uma referencia. A guia deve permanecer
-    ;; completa para que os offsets conservem toda a extensao geometrica.
-    (setq pJoint (b2_reference_intersection ent guia pCab))
-    (if (not pJoint)
-      (prompt "\nNao foi encontrada intersecao real entre a cabeceira e a linha guia.")
+  (defun b2_commit_maneuver (/ work parts stageError result)
+    ;; BREAK e JOIN trabalham numa copia. O original so sai do desenho
+    ;; quando todos os objetos finais ja existem e a uniao foi validada.
+    (setq b2Committed nil b2Original nil b2Outputs nil)
+    (setq work (b2_copy_entity ent))
+    (setq parts (if work (b2_split_copy_at_point work pTang) nil))
+    (if (not parts)
+      (setq stageError "Nao foi possivel cortar a copia da cabeceira na tangencia.")
+    )
+    (if (not stageError)
       (progn
-        ;; Cabeceira no lado definido; guia no lado oposto. Os offsets sao
-        ;; calculados antes de qualquer BREAK na geometria original.
-        (setq offsetData
-          (b2_offset_pair_for_maneuver
-            ent guia offCabDist offGuiaDist pCab pGuiaPick pJoint
-          )
-        )
-
-        (if (not offsetData)
-          (progn
-            (b2_clear_temporaries)
-            (prompt "\nNao foi encontrado um par de offsets nos lados selecionados.")
-          )
-          (progn
-            (setq offCab      (car offsetData))
-            (setq offGuia     (cadr offsetData))
-            (setq pVert       (caddr offsetData))
-            (setq usedVirtual (cadddr offsetData))
-            (if usedVirtual
-              (prompt "\nIntersecao dos offsets obtida por extensao virtual de ate 1.000 m.")
-            )
-            (if (not pVert)
-              (progn
-                (b2_clear_temporaries)
-                (prompt "\nNao foi encontrada intersecao valida entre os offsets selecionados.")
-              )
-              (progn
-                ;; O centro pertence ao offset interno da cabecera a R.
-                ;; A intersecao com o circulo externo fornece a solucao exata,
-                ;; inclusive para segmentos em arco da polilinha.
-                (if (and offCab (entget offCab)) (b2_delete_ent offCab))
-                (if (and offGuia (entget offGuia)) (b2_delete_ent offGuia))
-                (setq offCab nil)
-                (setq offGuia nil)
-                (setq offCentro (b2_offset_select_toward ent rGiro pVert))
-                (setq tmpExtCircle (b2_circle_entity pVert rBarra nil))
-                (setq centro
-                  (if (and offCentro tmpExtCircle)
-                    (b2_intersection_best offCentro tmpExtCircle pJoint)
-                    nil
-                  )
-                )
-                (b2_clear_temporaries)
-
-                (setq pTang
-                  (if centro (b2_closest_point ent centro) nil)
-                )
-                (if (or (not centro)
-                        (not pTang)
-                        (> (abs (- (distance centro pTang) rGiro)) 1e-4))
-                  (prompt "\nNao ha tangencia valida entre a cabeceira e a manobra.")
-                  (progn
-                    ;; A intersecao dos offsets define o lado ocupado pela
-                    ;; manobra. O giro e a conexao seguem o lado OPOSTO.
-                    ;; Em BOTAX, o ponto manual substitui essa regra.
-                    (if manualSideMode
-                      (setq pCutRef pSide)
-                      (setq pCutRef (b2_opposite_point pTang pVert))
-                    )
-                    (setq nSegGiro (b2_nseg_inscribed rGiro distSeg))
-                    (setq giroData
-                      (if *BOTA_CORTAR_CIRCULO*
-                        (b2_circle_gap_directional
-                          centro rGiro pTang pCutRef nSegGiro nil
-                        )
-                        (b2_circle_full_directional
-                          centro rGiro pTang pCutRef nSegGiro nil
-                        )
-                      )
-                    )
-                    (setq entGiro  (car giroData))
-                    (setq pGapIni  (cadr giroData))
-                    (setq pGapFin  (caddr giroData))
-                    (setq ptsGiro  (nth 4 giroData))
-
-                    ;; BOTA2 corta somente a cabeceira, na tangencia real do
-                    ;; circulo. A guia permanece intacta neste comando.
-                    (setq lastBefore (entlast))
-                    (b2_breakatpoint ent pTang)
-                    (setq lastAfter (entlast))
-                    (setq entCab2
-                      (if (and lastAfter (/= lastAfter lastBefore))
-                        lastAfter
-                        nil
-                      )
-                    )
-                    (if *BOTA_CONECTAR_CAB*
-                      (progn
-                        (setq entCabJoin
-                          (b2_select_side_segment ent entCab2 pTang pCutRef)
-                        )
-                        (setq joinOk
-                          (if entCabJoin
-                            (b2_join_two entGiro entCabJoin)
-                            nil
-                          )
-                        )
-                        (if (not entCabJoin)
-                          (prompt "\nAviso: nao foi possivel identificar o trecho correto da cabeceira.")
-                          (if (not joinOk)
-                            (prompt "\nAviso: o AutoCAD nao conseguiu unir a manobra a cabeceira.")
-                          )
-                        )
-                      )
-                      (prompt "\nConexao com cabeceira desativada para BOTA2.")
-                    )
-
-                    ;; Referencia visual do raio externo do implemento.
-                    (setq entBarra (b2_circle_entity centro rBarra 6))
-                    (prompt
-                      (strcat
-                        "\nRaio Interno: " (rtos rGiro 2 3)
-                        " - Raio Externo: " (rtos rBarra 2 3)
-                      )
-                    )
-                  )
-                )
-              )
-            )
-          )
+        (setq giroData
+          (if *BOTA_CORTAR_CIRCULO*
+            (b2_circle_gap_directional centro rGiro pTang pCutRef nSegGiro nil)
+            (b2_circle_full_directional centro rGiro pTang pCutRef nSegGiro nil)))
+        (setq entGiro (b2_track_temp (car giroData)))
+        (if (not (and entGiro (entget entGiro)))
+          (setq stageError "Nao foi possivel criar a polilinha da manobra.")
         )
       )
     )
+    (if (and (not stageError) *BOTA_CONECTAR_CAB*)
+      (progn
+        (setq entCabJoin
+          (b2_select_side_segment (car parts) (cadr parts) pTang pCutRef))
+        (setq joinOk (b2_join_two entGiro entCabJoin))
+        (if (not joinOk)
+          (setq stageError "Nao foi possivel unir a manobra ao tramo da cabeceira.")
+        )
+      )
+    )
+    (if (not stageError)
+      (progn
+        (setq entBarra (b2_track_temp (b2_circle_entity centro rBarra 6)))
+        (if (not (and entBarra (entget entBarra)))
+          (setq stageError "Nao foi possivel criar o circulo externo.")
+        )
+      )
+    )
+    (if (not stageError)
+      (progn
+        (setq b2Outputs (append (list entGiro entBarra) parts))
+        (setq b2Original ent)
+        (setq result (vl-catch-all-apply 'entdel (list ent)))
+        (if (and (not (vl-catch-all-error-p result)) result (not (entget ent)))
+          (setq b2Committed T)
+          (setq stageError "Nao foi possivel substituir a cabeceira original.")
+        )
+      )
+    )
+    (b2_clear_temporaries)
+    (if stageError
+      (prompt (strcat "\n" stageError " A cabeceira original foi preservada."))
+      (progn
+        (if (not *BOTA_CONECTAR_CAB*)
+          (prompt "\nConexao com cabeceira desativada para BOTA2.")
+        )
+        (prompt
+          (strcat "\nRaio Interno: " (rtos rGiro 2 3)
+                  " - Raio Externo: " (rtos rBarra 2 3)))
+      )
+    )
+    b2Committed
+  )
+
+  (defun b2_run_simple ()
+    (setq rBarra (+ rGiro (/ tamImpl 2.0)))
+    (b2_clear_temporaries)
+    (setq offsetData
+      (b2_prepare_offsets ent guia pCab pGuiaPick tamImpl seguridad))
+    (setq pVert (caddr offsetData))
+    (if pVert
+      (progn
+        (setq offCab (car offsetData) offGuia (cadr offsetData))
+        (setq usedVirtual (cadddr offsetData) cabLocal (nth 4 offsetData))
+        (setq pJoint (nth 5 offsetData))
+        (if usedVirtual
+          (prompt "\nIntersecao dos offsets obtida por extensao virtual de ate 1.000 m.")
+        )
+        (b2_delete_ent offCab)
+        (b2_delete_ent offGuia)
+        (setq offCab nil offGuia nil)
+        ;; O lado do centro permanece o do clique na guia, nao o de pVert.
+        (setq offCentro
+          (b2_offset_select_toward (if cabLocal cabLocal ent) rGiro pGuiaPick))
+        (if (not offCentro)
+          (progn
+            (if (not cabLocal)
+              (setq cabLocal (b2_header_temp_segment ent pJoint (* 2.0 tamImpl)))
+            )
+            (if cabLocal
+              (setq offCentro (b2_offset_select_toward cabLocal rGiro pGuiaPick))
+            )
+          )
+        )
+        (setq tmpExtCircle (b2_circle_entity pVert rBarra nil))
+        (setq centro
+          (if (and offCentro tmpExtCircle)
+            (b2_intersection_best offCentro tmpExtCircle pJoint)
+            nil))
+        (setq pTang (if centro (b2_closest_point ent centro) nil))
+        (b2_clear_temporaries)
+        (if (and centro pTang
+                 (<= (abs (- (distance centro pTang) rGiro)) 1e-4))
+          (progn
+            ;; Regra de giro existente: oposto a intersecao; BOTAX usa o mouse.
+            (setq pCutRef
+              (if manualSideMode pSide (b2_opposite_point pTang pVert)))
+            (setq nSegGiro (b2_nseg_inscribed rGiro distSeg))
+            (b2_commit_maneuver)
+          )
+          (prompt "\nNao ha tangencia valida no lado solicitado da cabeceira.")
+        )
+      )
+      (progn
+        (b2_clear_temporaries)
+        (prompt
+          (strcat "\n" (if offsetError offsetError
+            "Nao foi encontrada intersecao valida entre os offsets selecionados.")))
+      )
+    )
+  )
+
+  (princ)
+)
+
+(defun c:BOTA2 (/ *error* oldLuprec cfg sel ent guia pPick pCab pGuiaPick pSide pJoint manualSideMode
+                  offsetData usedVirtual offsetError offsetComError guiaLocal cabLocal
+                  b2Temps b2Outputs b2Original b2Committed
+                  rGiro tamImpl seguridad rBarra distSeg offCabDist offGuiaDist
+                  offCab offGuia offCentro tmpExtCircle pVert pCutRef
+                  pTang centro nSegGiro giroData entGiro entBarra ptsGiro
+                  pGapIni pGapFin entCabJoin joinOk)
+  (vl-load-com)
+  (_bota2_define_helpers)
+  (setq manualSideMode
+    (and (boundp '*BOTA2_MANUAL_SIDE_MODE*) *BOTA2_MANUAL_SIDE_MODE*)
+  )
+  (setq *BOTA2_MANUAL_SIDE_MODE* nil)
+
+  (defun b2_restore ()
+    (if oldLuprec (setvar "LUPREC" oldLuprec))
+  )
+
+  (defun *error* (msg)
+    (b2_clear_temporaries)
+    (b2_restore)
+    (setq *BOTA2_MANUAL_SIDE_MODE* nil)
+    (if (and msg (/= msg "Function cancelled") (/= msg "quit / exit abort"))
+      (prompt (strcat "\nErro: " msg))
+    )
+    (princ)
   )
 
   ;; -------------------------
   ;; Inicio del comando
   ;; -------------------------
-
-  (setq tol 1e-8)
 
   ;; Parametros preconfigurados
   (if (not *BOTA_RGIRO*)     (setq *BOTA_RGIRO* 10.000))
@@ -3432,22 +3430,6 @@
                       (setq *BOTA_DISTSEG*   distSeg)
 
                       (b2_run_simple)
-
-                                           ;; 2) DESPUES une el circulo con la cabecera.
-                                          ;;
-                                          ;;    NO prolonga ninguna entidad.
-                                          ;;    NO crea ningun segmento adicional.
-                                          ;;    Ambas geometrías ya comparten pTang.
-                                          ;;
-                                          ;;    Primero se hace BREAKATPOINT en la cabecera
-                                          ;;    para que pTang sea un extremo real.
-                                          ;;    Luego se ejecuta JOIN entre el arco y el tramo
-                                          ;;    de cabecera que comparte ese extremo.
-                                          ;; -------------------------------------------------
-
-                                          ;; Guarda el ultimo objeto para detectar el segundo
-                                          ;; tramo creado por BREAKATPOINT, si AutoCAD lo crea.
-
                     )
                   )
                 )
