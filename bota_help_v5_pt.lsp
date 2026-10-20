@@ -2,7 +2,7 @@
 ;; BOTA TOOLS - SUITE DE FERRAMENTAS DE MANOBRAS (Civil3D / AutoCAD)
 ;; Criador: Maicon Marcarini
 ;; Versao: 5.0
-;; Comandos incluidos: BOTA / BOTA2 / BOTA3 / BOTAF / BOTAC / BOTAH
+;; Comandos incluidos: BOTA / BOTA2 (B2) / BOTAM / BOTA3 / BOTAFILLET (BOTAF, BF) / BOTAC / BOTAH
 ;; ============================================================
 
 (vl-load-com)
@@ -17,6 +17,16 @@
 ;; FILLET de BOTA3 (mantem os nomes antigos por compatibilidade).
 (if (not *BOTA_FILLET_R*)   (setq *BOTA_FILLET_R* 30.000))
 (if (not *BOTA_FILLET_SEG*) (setq *BOTA_FILLET_SEG* 1.500))
+(if (not *BOTA_TRANS_L*)    (setq *BOTA_TRANS_L* 5.000))
+(if (not *BOTA_RECTO_K*)    (setq *BOTA_RECTO_K* 1.000))
+(defun _bota3_init_densification ()
+  ;; A marca preserva nil (desativado), inclusive ao recarregar o LSP.
+  (if (not *BOTA3_DENSIFY_CONFIGURADO*)
+    (setq *BOTA3_DENSIFY* T *BOTA3_DENSIFY_CONFIGURADO* T))
+  (if (not *BOTA_TRANS_L*) (setq *BOTA_TRANS_L* 5.000))
+  (if (not *BOTA3_DENSIFY_SEG*) (setq *BOTA3_DENSIFY_SEG* 1.000))
+)
+(_bota3_init_densification)
 ;; Concordancia geometrica de BOTAF (independente de BOTA3).
 (if (not *BOTAF_FILLET_R*)   (setq *BOTAF_FILLET_R* 10.000))
 (if (not *BOTAF_FILLET_SEG*) (setq *BOTAF_FILLET_SEG* 1.500))
@@ -292,9 +302,11 @@
 (defun c:BOTA2DEBUG
     (/ *error* selCab selGuide eCab eGuide pCabPick pGuidePick pCab pGuide
        tamImpl seguridad data pOffsetPoint usedVirtual cabSelected guideSelected
-       height pLegend legendRows offsetError offsetComError
+       height pLegend legendRows offsetError offsetComError tangentError tangentData
+       pCenterRaw pCenterCorrected pTangentDebug tanErr outerErr rGiro rBarra pJoint
        b2Temps b2Outputs b2Original b2Committed
        offCab offGuia offCentro tmpExtCircle guiaLocal cabLocal)
+  (_bota_session_pull)
   (vl-load-com)
   (_bota2_define_helpers)
 
@@ -330,6 +342,38 @@
                     (b2_prepare_offsets eCab eGuide pCab pGuidePick tamImpl seguridad))
                   (setq cabSelected (car data) guideSelected (cadr data))
                   (setq pOffsetPoint (caddr data) usedVirtual (cadddr data))
+                  (setq cabLocal (nth 4 data))
+                  (setq pJoint (nth 5 data))
+                  (setq rGiro *BOTA_RGIRO*)
+                  (setq rBarra (+ rGiro (/ tamImpl 2.0)))
+                  (if (and cabSelected pOffsetPoint)
+                    (progn
+                      (setq offCentro
+                        (b2_offset_select_toward
+                          (if cabLocal cabLocal eCab) rGiro pGuidePick
+                        )
+                      )
+                      (setq tmpExtCircle (b2_circle_entity pOffsetPoint rBarra nil))
+                      (setq tangentData
+                        (if (and offCentro tmpExtCircle)
+                          (b2_tangent_solution
+                            (if cabLocal cabLocal eCab)
+                            offCentro tmpExtCircle pOffsetPoint rGiro rBarra pJoint
+                          )
+                          nil
+                        )
+                      )
+                      (if tangentData
+                        (progn
+                          (setq pCenterCorrected (car tangentData))
+                          (setq pTangentDebug (cadr tangentData))
+                          (setq pCenterRaw (caddr tangentData))
+                          (setq tanErr (nth 3 tangentData))
+                          (setq outerErr (nth 4 tangentData))
+                        )
+                      )
+                    )
+                  )
                   (if cabSelected (_bota2d_style_entity cabSelected 3))
                   (if guideSelected (_bota2d_style_entity guideSelected 4))
                   (_bota2d_mark pCabPick nil 2 height)
@@ -344,6 +388,34 @@
                           (list (list
                             (if usedVirtual "INTERSECAO VIRTUAL (ATE 1 m)"
                               "INTERSECAO REAL DOS OFFSETS") 5))))
+                    )
+                  )
+                  (if pCenterRaw
+                    (progn
+                      (_bota2d_mark pCenterRaw nil 1 height)
+                      (setq legendRows
+                        (append legendRows (list (list "CENTRO CANDIDATO" 1)))
+                      )
+                    )
+                  )
+                  (if pCenterCorrected
+                    (progn
+                      (_bota2d_mark pCenterCorrected nil 6 height)
+                      (_bota2d_mark pTangentDebug nil 140 height)
+                      (setq legendRows
+                        (append legendRows
+                          (list
+                            (list "CENTRO CORRIGIDO" 6)
+                            (list
+                              (strcat
+                                "TANGENCIA | Erro int.=" (rtos tanErr 2 3)
+                                " | Erro ext.=" (rtos outerErr 2 3)
+                              )
+                              140
+                            )
+                          )
+                        )
+                      )
                     )
                   )
                   (if cabSelected
@@ -361,6 +433,7 @@
                   (setq b2Outputs (list cabSelected guideSelected) b2Committed T)
                   (b2_clear_temporaries)
                   (if offsetError (prompt (strcat "\n" offsetError)))
+                  (if tangentError (prompt (strcat "\n" tangentError)))
                   (prompt "\nUse BOTA2DEBUGCLEAR para apagar somente este diagnostico.")
                 )
                 (prompt "\nGuia ou parametros invalidos.")
@@ -434,8 +507,8 @@
   (if pair (cdr pair) nil)
 )
 
-(defun _bota_cfg_values_valid_p (values / rGiro tamImpl distSeg seguridad filletR filletSeg botafR botafSeg ranges joinCab cutCircle)
-  (if (and (listp values) (= (length values) 11))
+(defun _bota_cfg_values_valid_p (values / rGiro tamImpl distSeg seguridad filletR filletSeg botafR botafSeg ranges joinCab cutCircle densify transLength transSeg)
+  (if (and (listp values) (= (length values) 14))
     (progn
       (setq rGiro     (nth 0 values))
       (setq tamImpl   (nth 1 values))
@@ -448,6 +521,9 @@
       (setq ranges    (nth 8 values))
       (setq joinCab   (nth 9 values))
       (setq cutCircle (nth 10 values))
+      (setq densify   (nth 11 values))
+      (setq transLength (nth 12 values))
+      (setq transSeg  (nth 13 values))
       (and (numberp rGiro) (> rGiro 0.0)
            (numberp tamImpl) (> tamImpl 0.0)
            (numberp distSeg) (> distSeg 0.0)
@@ -459,13 +535,16 @@
            (_bota_botaf_ranges_valid_p ranges)
            (or (= joinCab 0.0) (= joinCab 1.0))
            (or (= cutCircle 0.0) (= cutCircle 1.0))
+           (numberp densify) (or (= densify 0.0) (= densify 1.0))
+           (numberp transLength) (>= transLength 0.0)
+           (numberp transSeg) (> transSeg 0.0)
       )
     )
     nil
   )
 )
 
-(defun _bota_cfg_apply_values (values)
+(defun _bota_cfg_set_values (values)
   (setq *BOTA_RGIRO*      (nth 0 values))
   (setq *BOTA_IMPL*       (nth 1 values))
   (setq *BOTA_DISTSEG*    (nth 2 values))
@@ -479,6 +558,57 @@
   (setq *BOTA_CORTAR_CIRCULO* (/= (nth 10 values) 0.0))
   (setq *BOTA_CONECTAR_CAB_CONFIGURADO* T)
   (setq *BOTA_CORTAR_CIRCULO_CONFIGURADO* T)
+  (setq *BOTA3_DENSIFY* (/= (nth 11 values) 0.0))
+  (setq *BOTA_TRANS_L* (nth 12 values))
+  (setq *BOTA3_DENSIFY_SEG* (nth 13 values))
+  (setq *BOTA3_DENSIFY_CONFIGURADO* T)
+)
+
+(defun _bota_cfg_current_values ()
+  (list *BOTA_RGIRO* *BOTA_IMPL* *BOTA_DISTSEG* *BOTA_SEGURIDAD*
+        *BOTA_FILLET_R* *BOTA_FILLET_SEG* *BOTAF_FILLET_R* *BOTAF_FILLET_SEG*
+        *BOTAF_AUTO_RANGES*
+        (if *BOTA_CONECTAR_CAB* 1.0 0.0)
+        (if *BOTA_CORTAR_CIRCULO* 1.0 0.0)
+        (if *BOTA3_DENSIFY* 1.0 0.0)
+        *BOTA_TRANS_L* *BOTA3_DENSIFY_SEG*)
+)
+
+(defun _bota_session_publish (/ values factor)
+  ;; Um unico snapshot validado, comum aos desenhos desta instancia do AutoCAD.
+  ;; Nao publica entidades, resultados derivados ou estado temporario de comandos.
+  (setq values (_bota_cfg_current_values)
+        factor (if (numberp *BOTA_RECTO_K*) *BOTA_RECTO_K* 1.0))
+  (if (and (_bota_cfg_values_valid_p values) (>= factor 0.0))
+    (progn
+      (vl-bb-set 'BOTAHELP_SETTINGS_V1 (list values factor))
+      T))
+)
+
+(defun _bota_session_pull (/ snapshot values factor)
+  ;; Importar nunca publica: carregar outro desenho nao substitui a sessao.
+  (setq snapshot (vl-bb-ref 'BOTAHELP_SETTINGS_V1))
+  (if (and (listp snapshot) (= (length snapshot) 2))
+    (progn
+      (setq values (car snapshot) factor (cadr snapshot))
+      (if (and (_bota_cfg_values_valid_p values)
+               (numberp factor) (>= factor 0.0))
+        (progn
+          (_bota_cfg_set_values values)
+          (setq *BOTA_RECTO_K* factor)
+          T))))
+)
+
+(defun _bota_session_start ()
+  ;; Somente a primeira carga fornece os valores iniciais da sessao.
+  (if (not (_bota_session_pull)) (_bota_session_publish))
+)
+
+(defun _bota_cfg_apply_values (values)
+  (if (_bota_cfg_values_valid_p values)
+    (progn
+      (_bota_cfg_set_values values)
+      (_bota_session_publish)))
 )
 
 (defun _bota_cfg_write_pair (fn key value)
@@ -495,6 +625,7 @@
 )
 
 (defun _bota_cfg_save_file (path / fn ranges i)
+  (_bota3_init_densification)
   (setq fn (open path "w"))
   (if fn
     (progn
@@ -519,11 +650,20 @@
       )
       (_bota_cfg_write_pair fn "JOIN_CAB" (if *BOTA_CONECTAR_CAB* "1" "0"))
       (_bota_cfg_write_pair fn "CUT_CIRCLE" (if *BOTA_CORTAR_CIRCULO* "1" "0"))
+      (_bota_cfg_write_pair fn "BOTA3_DENSIFY" (if *BOTA3_DENSIFY* "1" "0"))
+      (_bota_cfg_write_pair fn "BOTA3_TRANS_L" (rtos *BOTA_TRANS_L* 2 6))
+      (_bota_cfg_write_pair fn "BOTA3_DENSIFY_SEG" (rtos *BOTA3_DENSIFY_SEG* 2 6))
       (close fn)
       T
     )
     nil
   )
+)
+
+(defun _bota_cfg_optional_number (data key default / pair)
+  ;; Ausente: perfil anterior. Presente e invalido: rejeitar o perfil.
+  (setq pair (assoc key data))
+  (if pair (_bota_cfg_number (cdr pair)) default)
 )
 
 (defun _bota_cfg_values_from_file (path / fn header line pos key value data ranges values)
@@ -566,6 +706,9 @@
               ranges
               (_bota_cfg_number (_bota_cfg_value data "JOIN_CAB"))
               (_bota_cfg_number (_bota_cfg_value data "CUT_CIRCLE"))
+              (_bota_cfg_optional_number data "BOTA3_DENSIFY" 1.0)
+              (_bota_cfg_optional_number data "BOTA3_TRANS_L" 5.0)
+              (_bota_cfg_optional_number data "BOTA3_DENSIFY_SEG" 1.0)
             )
           )
           (if (_bota_cfg_values_valid_p values)
@@ -639,18 +782,23 @@
     "(atof (get_tile \"botafSeg\")) "
     "(_bota_botaf_ranges_from_dcl) "
     "(if (= (get_tile \"joinCab\") \"1\") 1.0 0.0) "
-    "(if (= (get_tile \"cutCircle\") \"1\") 1.0 0.0))) "
+    "(if (= (get_tile \"cutCircle\") \"1\") 1.0 0.0) "
+    "(if (= (get_tile \"b3Densify\") \"1\") 1.0 0.0) "
+    "(_bota_cfg_number (get_tile \"b3TransL\")) "
+    "(_bota_cfg_number (get_tile \"b3DensSeg\")))) "
     "(if (_bota_cfg_values_valid_p _bota_dcl_values) "
     "(progn (_bota_cfg_apply_values _bota_dcl_values) (done_dialog "
     (itoa status)
     ")) "
-    "(alert \"Informe valores validos. As faixas devem estar entre 0 e 180 graus, sem sobreposicao, e ter raio e segmento maiores que zero.\"))"
+    "(alert \"Informe valores validos. Densificacao: extensao >= 0 e distancia entre vertices > 0. As faixas devem estar entre 0 e 180 graus, sem sobreposicao, e ter raio e segmento maiores que zero.\"))"
     ")"
   )
 )
 
 (defun _bota_show_dcl (/ dclFile fn dclId status keepOpen _bota_dcl_values i range)
   (vl-load-com)
+  (_bota_session_pull)
+  (_bota3_init_densification)
   (setq dclFile (vl-filename-mktemp "bota_cfg" nil ".dcl"))
   (setq fn (open dclFile "w"))
   (if fn
@@ -666,21 +814,24 @@
       (write-line "      : edit_box { label = \"Distancia Max. Vertices Circulo (m):\"; key = \"distSeg\"; edit_width = 12; }" fn)
       (write-line "    }" fn)
       (write-line "    : boxed_column {" fn)
-      (write-line "      label = \"Seguranca (somente BOTA2)\";" fn)
+      (write-line "      label = \"Seguranca (BOTA2 / BOTA3)\";" fn)
       (write-line "      : edit_box { label = \"Seguranca Linha Guia (m):\"; key = \"seguridad\"; edit_width = 12; }" fn)
       (write-line "    }" fn)
       (write-line "    : boxed_column {" fn)
       (write-line "      label = \"Fillet (BOTA3)\";" fn)
       (write-line "      : edit_box { label = \"Raio do Fillet (m):\"; key = \"filletR\"; edit_width = 12; }" fn)
       (write-line "      : edit_box { label = \"Distancia Max. Vertices Fillet (m):\"; key = \"filletSeg\"; edit_width = 12; }" fn)
+      (write-line "      : toggle { label = \"Ativar densificacao de BOTA3\"; key = \"b3Densify\"; }" fn)
+      (write-line "      : edit_box { label = \"Extensao antes/depois da manobra (m):\"; key = \"b3TransL\"; edit_width = 12; }" fn)
+      (write-line "      : edit_box { label = \"Distancia Max. Vertices no percurso (m):\"; key = \"b3DensSeg\"; edit_width = 12; }" fn)
       (write-line "    }" fn)
       (write-line "    : boxed_column {" fn)
-      (write-line "      label = \"Concordancia Segmentada (BOTAF)\";" fn)
+      (write-line "      label = \"Concordancia Segmentada (BOTAFILLET)\";" fn)
        (write-line "      : edit_box { label = \"Raio da Concordancia (m):\"; key = \"botafR\"; edit_width = 12; }" fn)
        (write-line "      : edit_box { label = \"Distancia Max. Vertices (m):\"; key = \"botafSeg\"; edit_width = 12; }" fn)
        (write-line "    }" fn)
        (write-line "    : boxed_column {" fn)
-       (write-line "      label = \"Raio Automatico BOTAF por Angulo\";" fn)
+       (write-line "      label = \"Raio Automatico BOTAFILLET por Angulo\";" fn)
        (write-line "      : text { label = \"Configure quatro faixas sem sobreposicao.\"; }" fn)
        (setq i 1)
        (repeat 4
@@ -725,6 +876,9 @@
             (set_tile "seguridad" (rtos *BOTA_SEGURIDAD* 2 3))
             (set_tile "filletR"   (rtos *BOTA_FILLET_R* 2 3))
             (set_tile "filletSeg" (rtos *BOTA_FILLET_SEG* 2 3))
+            (set_tile "b3Densify" (if *BOTA3_DENSIFY* "1" "0"))
+            (set_tile "b3TransL" (rtos *BOTA_TRANS_L* 2 3))
+            (set_tile "b3DensSeg" (rtos *BOTA3_DENSIFY_SEG* 2 3))
             (set_tile "botafR"    (rtos *BOTAF_FILLET_R* 2 3))
             (set_tile "botafSeg"  (rtos *BOTAF_FILLET_SEG* 2 3))
             (setq i 1)
@@ -805,10 +959,10 @@
       (write-line "      label = \"Comandos Disponiveis\";" fn)
       (write-line "      : paragraph {" fn)
       (write-line "        : text_part { label = \"BOTA  - Manobra manual selecionando o vertice onde deve passar o externo do implemento.\"; }" fn)
-      (write-line "        : text_part { label = \"BOTA2 - Manobra automatica com cabeceira e linha guia.\"; }" fn)
-      (write-line "        : text_part { label = \"BOTAX - BOTA2 com ponto manual para definir o lado do giro.\"; }" fn)
-      (write-line "        : text_part { label = \"BOTA3 - Manobra por linha guia com fillet automatico.\"; }" fn)
-      (write-line "        : text_part { label = \"BOTAF - Fillet automatico entre cabeceira e linha, convertido em segmentos.\"; }" fn)
+      (write-line "        : text_part { label = \"BOTA2 (B2) - Manobra automatica com cabeceira e linha guia.\"; }" fn)
+      (write-line "        : text_part { label = \"BOTAM - BOTA2 com ponto manual para definir o lado do giro.\"; }" fn)
+      (write-line "        : text_part { label = \"BOTA3 (B3) - Manobra por linha guia com fillet automatico.\"; }" fn)
+      (write-line "        : text_part { label = \"BOTAFILLET (BOTAF/BF) - Concordancia automatica entre cabeceira e linha.\"; }" fn)
       (write-line "        : text_part { label = \"BOTAC - Configura e salva/carrega perfis de parametros.\"; }" fn)
       (write-line "        : text_part { label = \"BOTAH - Mostra esta janela de ajuda.\"; }" fn)
       (write-line "      }" fn)
@@ -835,10 +989,13 @@
       (write-line "      : paragraph {" fn)
       (write-line "        : text_part { label = \"Raio Fillet: raio da concordancia (arco de conexao).\"; }" fn)
       (write-line "        : text_part { label = \"Fillet Seg.: distancia max. entre vertices da concordancia.\"; }" fn)
+      (write-line "        : text_part { label = \"BOTAC permite ativar/desativar a densificacao de BOTA3.\"; }" fn)
+      (write-line "        : text_part { label = \"O limite cobre giro, reta e fillet, com extensao antes/depois.\"; }" fn)
+      (write-line "        : text_part { label = \"Padrao: 5 m por extremo e maximo de 1 m entre vertices.\"; }" fn)
       (write-line "      }" fn)
       (write-line "    }" fn)
       (write-line "    : boxed_column {" fn)
-      (write-line "      label = \"Parametros de Concordancia (BOTAF)\";" fn)
+      (write-line "      label = \"Parametros de Concordancia (BOTAFILLET)\";" fn)
       (write-line "      : paragraph {" fn)
       (write-line "        : text_part { label = \"Enter usa o raio configurado; R altera somente esse raio.\"; }" fn)
       (write-line "        : text_part { label = \"A usa a faixa de angulo com raio e dist. entre vertices proprios.\"; }" fn)
@@ -899,6 +1056,7 @@
                  score c entGiro entBarra giroData ptsGiro
                  lastBefore lastAfter entCab2 entCabJoin joinOk)
 
+  (_bota_session_pull)
   (vl-load-com)
 
   ;; -------------------------
@@ -1420,8 +1578,7 @@
   (setvar "LUPREC" 3)
 
   (prompt "\nBOTA - Manobra segmentada.")
-  (prompt "\nSelecione a cabeceira perto da zona desejada: ")
-  (setq sel (entsel))
+  (setq sel (entsel "\nSelecione a cabeceira perto da zona desejada: "))
 
   (if (not sel)
     (prompt "\nNenhuma cabeceira selecionada.")
@@ -1544,7 +1701,7 @@
                     )
                   )
                   (if rGiro
-                    (setq *BOTA_RGIRO* rGiro)
+                    (progn (setq *BOTA_RGIRO* rGiro) (_bota_session_publish))
                   )
                   (setq rGiro *BOTA_RGIRO*)
                 )
@@ -1569,6 +1726,7 @@
                   (setq *BOTA_IMPL*    tamImpl)
                   (setq *BOTA_RBARRA*  rBarra)
                   (setq *BOTA_DISTSEG* distSeg)
+                  (_bota_session_publish)
 
                   ;; Busca soluciones en todos los tramos de la polilinea.
                   (setq candidates nil)
@@ -2349,11 +2507,12 @@
     best
   )
 
-  (defun b2_intersection_best (e1 e2 pref / pts valid p)
+  (defun b2_real_intersections (e1 e2 / pts valid p)
     ;; IMPORTANTE:
     ;; Busca somente intersecao REAL entre os offsets.
     ;; Nao estende as entidades.
-    ;; Se nao existir intersecao real, devolve nil.
+    ;; Se nao existir intersecao real, devolve nil. Mantem todos os pontos
+    ;; validos para que o solver de tangencia possa avaliar cada centro.
 
     (setq pts (b2_intersections e1 e2 0))
     (setq valid nil)
@@ -2367,10 +2526,72 @@
       (setq valid (b2_endpoint_contacts e1 e2))
     )
 
+    valid
+  )
+
+  (defun b2_intersection_best (e1 e2 pref / valid)
+    (setq valid (b2_real_intersections e1 e2))
+
     (if valid
       (b2_best_point valid pref)
       nil
     )
+  )
+
+  (defun b2_tangent_solution
+    (eHeader eCenterOffset eOuterCircle pVert rInner rOuter pReference
+     / tol centers rawCenter pTang rawErr v correctedCenter outerErr solution)
+    ;; A tolerancia vale somente para validar e corrigir o CENTRO calculado.
+    ;; Nao altera offset, guia, cortes ou a cabecaria original.
+    (setq tol 0.050)
+    (setq tangentError nil)
+    (setq solution nil)
+    (setq centers (b2_real_intersections eCenterOffset eOuterCircle))
+    ;; A intersecao mais proxima de pJoint e a unica que pertence a manobra
+    ;; solicitada. Avaliar o outro lado do circulo pode inverter o giro.
+    ;; Este e o mesmo criterio geometrico usado antes da tolerancia.
+    (setq rawCenter (if centers (b2_best_point centers pReference) nil))
+    (if rawCenter
+      (progn
+        (setq rawCenter (b2_pt3 rawCenter))
+        (setq pTang (b2_closest_point eHeader rawCenter))
+        (if pTang
+          (progn
+            (setq rawErr (abs (- (distance rawCenter pTang) rInner)))
+            (setq v (b2_unit (b2_v- rawCenter pTang)))
+            (if v
+              (progn
+                ;; A tangencia final e exata; tol aceita somente o pequeno
+                ;; ajuste numerico devolvido pelo OFFSET/IntersectWith.
+                (setq correctedCenter (b2_v+ pTang (b2_v* rInner v)))
+                (setq outerErr
+                  (abs (- (distance correctedCenter pVert) rOuter))
+                )
+                ;; Margem minima evita que 0.050 seja rejeitado por arredondamento
+                ;; binario, mantendo o limite operacional em 0.050 m.
+                (if (and (<= rawErr (+ tol 1e-9))
+                         (<= outerErr (+ tol 1e-9)))
+                  ;; (centro-corrigido tangencia centro-original
+                  ;;  erro-interno erro-externo)
+                  (setq solution
+                    (list correctedCenter pTang rawCenter rawErr outerErr)
+                  )
+                )
+              )
+            )
+          )
+        )
+      )
+    )
+    (if (not solution)
+      (setq tangentError
+        (if centers
+          "Centros candidatos excedem a tolerancia de tangencia de 0.050 m."
+          "Nao foi encontrado centro candidato entre o offset da cabeceira e o circulo externo."
+        )
+      )
+    )
+    solution
   )
 
   (defun b2_intersection_extended_best (e1 e2 pref / pts)
@@ -2576,31 +2797,52 @@
   )
 
   (defun b2_guide_temp_segment
-    (e pJoint pGuideRef segLength / work total jointDist pLimit)
-    ;; Dois cortes nativos na copia, antes do OFFSET, a 1,5 x o implemento.
+    (e pJoint pGuideRef segLength reserveLength
+     / work total jointDist guideDist pBefore pAfter)
+    ;; Mantem uma reserva curta do lado oposto ao clique e 1,5 x implemento
+    ;; no lado do clique. Os dois cortes ocorrem somente na copia.
     (setq work (b2_copy_entity e))
     (if work
-      (setq work (b2_break_copy_keep_toward work pJoint pGuideRef))
-    )
-    (if work
       (progn
-        (setq total (b2_curve_total_length work))
-        (setq jointDist (b2_curve_dist_at_point work pJoint))
-        (if (and total jointDist)
-          (if (> total (+ segLength 1e-5))
-            (progn
-              (setq pLimit
-                (vl-catch-all-apply 'vlax-curve-getPointAtDist
-                  (list work
-                    (if (<= jointDist 1e-5) segLength (- total segLength))
-                  )
+        ;; As medidas usam a curva original para que o segundo corte conserve
+        ;; o sentido correto mesmo apos a primeira quebra da copia.
+        (setq total (b2_curve_total_length e))
+        (setq jointDist (b2_curve_dist_at_point e pJoint))
+        (setq guideDist (b2_curve_dist_at_point e pGuideRef))
+        (if (and total jointDist guideDist)
+          (progn
+            (if (>= guideDist jointDist)
+              (progn
+                (setq pBefore (max 0.0 (- jointDist reserveLength)))
+                (setq pAfter (min total (+ jointDist segLength)))
+              )
+              (progn
+                (setq pBefore (max 0.0 (- jointDist segLength)))
+                (setq pAfter (min total (+ jointDist reserveLength)))
+              )
+            )
+            (if (> pBefore 1e-5)
+              (progn
+                (setq pBefore
+                  (vl-catch-all-apply 'vlax-curve-getPointAtDist
+                    (list e pBefore)))
+                (if (and pBefore (not (vl-catch-all-error-p pBefore)))
+                  (setq work
+                    (b2_break_copy_keep_toward work (b2_pt3 pBefore) pJoint))
+                  (progn (b2_delete_ent work) (setq work nil))
                 )
               )
-              (if (and pLimit (not (vl-catch-all-error-p pLimit)))
-                (setq work
-                  (b2_break_copy_keep_toward work (b2_pt3 pLimit) pJoint)
+            )
+            (if (and work (< pAfter (- total 1e-5)))
+              (progn
+                (setq pAfter
+                  (vl-catch-all-apply 'vlax-curve-getPointAtDist
+                    (list e pAfter)))
+                (if (and pAfter (not (vl-catch-all-error-p pAfter)))
+                  (setq work
+                    (b2_break_copy_keep_toward work (b2_pt3 pAfter) pJoint))
+                  (progn (b2_delete_ent work) (setq work nil))
                 )
-                (progn (b2_delete_ent work) (setq work nil))
               )
             )
           )
@@ -2731,31 +2973,21 @@
   )
 
   (defun b2_offset_pair_for_maneuver
-    (eCab eGuia distCab distGuia pCabRef pGuideRef pJoint cabWindow
-     / cabEntries guideEntries cabEntry guideEntry match cabBase cabWork)
+    (eCab eGuia distCab distGuia pCabRef pGuideRef pJoint
+     / cabEntries guideEntries cabEntry guideEntry match)
     ;; Cabecaria no lado da guia; guia no lado oposto ao clique da cabecaria.
-    (setq offsetError nil offsetComError nil cabBase eCab)
-    (setq cabEntries (b2_offset_candidates_signed cabBase distCab))
-    (setq cabEntry (b2_signed_entry_by_side cabEntries cabBase pGuideRef T))
+    ;; As duas curvas ja chegam limitadas a uma janela temporaria local.
+    (setq offsetError nil offsetComError nil)
+    (setq cabEntries (b2_offset_candidates_signed eCab distCab))
+    (setq cabEntry (b2_signed_entry_by_side cabEntries eCab pGuideRef T))
     (if (not cabEntry)
       (progn
         (b2_delete_signed_entries_except cabEntries nil)
         (setq cabEntries nil)
-        (setq cabWork (b2_header_temp_segment eCab pJoint cabWindow))
-        (if cabWork
-          (progn
-            (setq cabBase cabWork offsetComError nil)
-            (setq cabEntries (b2_offset_candidates_signed cabBase distCab))
-            (setq cabEntry
-              (b2_signed_entry_by_side cabEntries cabBase pGuideRef T))
-          )
-        )
-        (if (not cabEntry)
-          (setq offsetError
-            (strcat
-              "Nao foi possivel criar o offset da cabeceira no lado do clique da guia."
-              (if offsetComError (strcat " Civil 3D: " offsetComError) "")))
-        )
+        (setq offsetError
+          (strcat
+            "Nao foi possivel criar o offset da cabeceira no lado do clique da guia."
+            (if offsetComError (strcat " Civil 3D: " offsetComError) "")))
       )
     )
     (if cabEntry
@@ -2784,27 +3016,41 @@
     ;; Mesmo sem intersecao, o debug pode mostrar exatamente os offsets que
     ;; o comando selecionou. Somente um ponto valido autoriza a manobra.
     (if (or cabEntry guideEntry)
-      (list (car cabEntry) (car guideEntry) (cadr match) (caddr match) cabWork)
+      (list (car cabEntry) (car guideEntry) (cadr match) (caddr match))
       nil
     )
   )
 
   (defun b2_prepare_offsets
-    (eCab eGuide pCabRef pGuideRef impl safety / joint work data)
-    ;; Entrada unica do solver para BOTA2, BOTAX e BOTA2DEBUG.
+    (eCab eGuide pCabRef pGuideRef impl safety / joint guideLocal cabLocal data)
+    ;; Entrada unica do solver para BOTA2, BOTAM e BOTA2DEBUG.
     (setq offsetError nil offsetComError nil)
     (setq joint (b2_reference_intersection eCab eGuide pCabRef))
     (if joint
       (progn
-        (setq work (b2_guide_temp_segment eGuide joint pGuideRef (* 1.5 impl)))
-        (if work
+        (setq guideLocal
+          (b2_guide_temp_segment
+            eGuide joint pGuideRef (* 1.5 impl) (* 0.2 impl)))
+        (if guideLocal
           (progn
-            (setq data
-              (b2_offset_pair_for_maneuver
-                eCab work (/ impl 2.0) (+ (/ impl 2.0) safety)
-                ;; Reserva da cabecaria: 2 x implemento em cada lado.
-                pCabRef pGuideRef joint (* 2.0 impl)))
-            (if data (append data (list joint)) nil)
+            ;; Isola a cabecaria antes do OFFSET, como no BREAK manual que
+            ;; resolve guias conectadas em outros extremos.
+            (setq cabLocal (b2_header_temp_segment eCab joint (* 2.0 impl)))
+            (if cabLocal
+              (progn
+                (setq data
+                  (b2_offset_pair_for_maneuver
+                    cabLocal guideLocal (/ impl 2.0) (+ (/ impl 2.0) safety)
+                    pCabRef pGuideRef joint))
+                (if data
+                  (append data (list cabLocal joint))
+                  nil)
+              )
+              (progn
+                (setq offsetError "Nao foi possivel criar o tramo temporario da cabeceira.")
+                nil
+              )
+            )
           )
           (progn
             (setq offsetError "Nao foi possivel criar o tramo temporario da linha guia.")
@@ -3142,10 +3388,12 @@
     (b2_clear_temporaries)
     (setq offsetData
       (b2_prepare_offsets ent guia pCab pGuiaPick tamImpl seguridad))
+    ;; Registra los offsets aunque no exista pVert. Asi, un intento fallido
+    ;; no deja copias de las curvas en el dibujo.
+    (setq offCab (car offsetData) offGuia (cadr offsetData))
     (setq pVert (caddr offsetData))
     (if pVert
       (progn
-        (setq offCab (car offsetData) offGuia (cadr offsetData))
         (setq usedVirtual (cadddr offsetData) cabLocal (nth 4 offsetData))
         (setq pJoint (nth 5 offsetData))
         (if usedVirtual
@@ -3154,36 +3402,43 @@
         (b2_delete_ent offCab)
         (b2_delete_ent offGuia)
         (setq offCab nil offGuia nil)
-        ;; O lado do centro permanece o do clique na guia, nao o de pVert.
+        ;; O lado do centro permanece o do clique na guia, na mesma copia
+        ;; local de cabecaria usada pelos offsets da manobra.
         (setq offCentro
-          (b2_offset_select_toward (if cabLocal cabLocal ent) rGiro pGuiaPick))
-        (if (not offCentro)
-          (progn
-            (if (not cabLocal)
-              (setq cabLocal (b2_header_temp_segment ent pJoint (* 2.0 tamImpl)))
+          (b2_offset_select_toward cabLocal rGiro pGuiaPick))
+        (setq tmpExtCircle (b2_circle_entity pVert rBarra nil))
+        (setq tangentData
+          (if (and offCentro tmpExtCircle)
+            (b2_tangent_solution
+              cabLocal offCentro tmpExtCircle pVert rGiro rBarra pJoint
             )
-            (if cabLocal
-              (setq offCentro (b2_offset_select_toward cabLocal rGiro pGuiaPick))
-            )
+            nil
           )
         )
-        (setq tmpExtCircle (b2_circle_entity pVert rBarra nil))
-        (setq centro
-          (if (and offCentro tmpExtCircle)
-            (b2_intersection_best offCentro tmpExtCircle pJoint)
-            nil))
-        (setq pTang (if centro (b2_closest_point ent centro) nil))
-        (b2_clear_temporaries)
-        (if (and centro pTang
-                 (<= (abs (- (distance centro pTang) rGiro)) 1e-4))
+        (if tangentData
           (progn
-            ;; Regra de giro existente: oposto a intersecao; BOTAX usa o mouse.
+            (setq centro (car tangentData))
+            (setq pTang (cadr tangentData))
+          )
+          (setq centro nil pTang nil)
+        )
+        (b2_clear_temporaries)
+        (if (and centro pTang)
+          (progn
+            ;; Regra de giro existente: oposto a intersecao; BOTAM usa o mouse.
             (setq pCutRef
               (if manualSideMode pSide (b2_opposite_point pTang pVert)))
             (setq nSegGiro (b2_nseg_inscribed rGiro distSeg))
             (b2_commit_maneuver)
           )
-          (prompt "\nNao ha tangencia valida no lado solicitado da cabeceira.")
+          (prompt
+            (strcat
+              "\n"
+              (if tangentError tangentError
+                "Nao ha tangencia valida no lado solicitado da cabeceira."
+              )
+            )
+          )
         )
       )
       (progn
@@ -3199,12 +3454,13 @@
 )
 
 (defun c:BOTA2 (/ *error* oldLuprec cfg sel ent guia pPick pCab pGuiaPick pSide pJoint manualSideMode
-                  offsetData usedVirtual offsetError offsetComError guiaLocal cabLocal
+                  offsetData usedVirtual offsetError offsetComError tangentError tangentData guiaLocal cabLocal
                   b2Temps b2Outputs b2Original b2Committed
                   rGiro tamImpl seguridad rBarra distSeg offCabDist offGuiaDist
                   offCab offGuia offCentro tmpExtCircle pVert pCutRef
                   pTang centro nSegGiro giroData entGiro entBarra ptsGiro
                   pGapIni pGapFin entCabJoin joinOk)
+  (_bota_session_pull)
   (vl-load-com)
   (_bota2_define_helpers)
   (setq manualSideMode
@@ -3241,11 +3497,10 @@
   (setvar "LUPREC" 3)
 
   (if manualSideMode
-    (prompt "\nBOTAX - Manobra por linha guia com lado manual.")
+    (prompt "\nBOTAM - Manobra por linha guia com lado manual.")
     (prompt "\nBOTA2 - Manobra por linha guia.")
   )
-  (prompt "\nSelecione a cabeceira perto da zona desejada: ")
-  (setq sel (entsel))
+  (setq sel (entsel "\nSelecione a cabeceira perto da zona desejada: "))
 
   (if (not sel)
     (prompt "\nNenhuma cabeceira selecionada.")
@@ -3267,8 +3522,7 @@
 
           (setq pCab (b2_pt3 pCab))
 
-          (prompt "\nSelecione a linha guia: ")
-          (setq sel (entsel))
+          (setq sel (entsel "\nSelecione a linha guia: "))
 
           (if (not sel)
             (prompt "\nNenhuma linha guia selecionada.")
@@ -3399,7 +3653,7 @@
                         )
                       )
                       (if rGiro
-                        (setq *BOTA_RGIRO* rGiro)
+                        (progn (setq *BOTA_RGIRO* rGiro) (_bota_session_publish))
                       )
                       (setq rGiro *BOTA_RGIRO*)
                     )
@@ -3428,6 +3682,7 @@
                       (setq *BOTA_IMPL*      tamImpl)
                       (setq *BOTA_SEGURIDAD* seguridad)
                       (setq *BOTA_DISTSEG*   distSeg)
+                      (_bota_session_publish)
 
                       (b2_run_simple)
                     )
@@ -3445,10 +3700,10 @@
 )
 
 ;; ============================================================
-;; COMANDO BOTAX - BOTA2 COM PONTO MANUAL DE LADO
+;; COMANDO BOTAM - BOTA2 COM PONTO MANUAL DE LADO
 ;; ============================================================
 
-(defun c:BOTAX ()
+(defun c:BOTAM ()
   ;; Reutiliza todo o calculo de BOTA2. O terceiro clique define
   ;; explicitamente o lado do giro, do corte e da conexao na cabeceira.
   (setq *BOTA2_MANUAL_SIDE_MODE* T)
@@ -3461,7 +3716,7 @@
 ;; Maniobra con la base de BOTA2 y FILLET real de AutoCAD hacia linea de guiado
 ;; ============================================================
 
-(defun c:BOTA3 (/ *error* oldLuprec cfg sel ent guia guiaLocal cabLocal pPick pCab pSide pVert pCutRef
+(defun c:BOTA3 (/ *error* oldLuprec cfg sel ent guia guiaLocal cabLocal pPick pCab pJoint pSide pVert pCutRef
                   rGiro tamImpl seguridad rBarra distSeg filletR filletDistSeg
                   offCabDist offGuiaDist offCab offGuia tol radioTrabajo stepGuia stepCab
                   endParam i p1 p2 u n segLen side base rel tProj pFoot dPerp
@@ -3469,8 +3724,9 @@
                   nSegGiro score c entGiro entBarra ptsGiro lastBefore lastAfter
                   entCab2 entCabJoin joinOk tmpCircle tmpGuide tmpFillet
                   giroData pGapIni pGapFin pGuiaPick
-                  pGuideBase vCutSide vCenter
-                  entFillet joinFilletOk)
+                  vCenter tmpL
+                  entFillet joinFilletOk
+                  tmpL)
 
   (vl-load-com)
 
@@ -3518,7 +3774,16 @@
   ;; -------------------------
   ;; Funciones auxiliares
   ;; -------------------------
+  (_bota3_define_helpers)
+  (_bota3_define_pipeline)
 
+  ;; Las definiciones se cargan tambien desde las pruebas nativas.
+  (b3_command_body)
+  (b3_restore)
+  (princ)
+)
+
+(defun _bota3_define_helpers ()
   (defun b3_pt3 (p)
     (list (car p) (cadr p) 0.0)
   )
@@ -5345,6 +5610,554 @@
   ;; Inicio del comando
   ;; -------------------------
 
+)
+
+(defun _bota3_define_pipeline ()
+  (_bota2_define_helpers)
+  (_bota3_init_densification)
+
+  (defun b3_densify_stations (d0 d1 low high spacing / a b count step index d stations)
+    ;; Apenas estacoes novas internas ao segmento; inclui os limites da janela.
+    (setq a (max d0 low) b (min d1 high))
+    (if (> (- b a) 1e-8)
+      (progn
+        (setq count (max 1 (b3_ceil (/ (- b a) spacing)))
+              step (/ (- b a) count) index 0)
+        (repeat (1+ count)
+          (setq d (if (= index count) b (+ a (* index step))))
+          (if (and (> d (+ d0 1e-8)) (< d (- d1 1e-8)))
+            (setq stations (cons d stations)))
+          (setq index (1+ index)))))
+    (reverse stations)
+  )
+
+  (defun b3_bulge_fraction (bulge fraction / angle)
+    ;; Bulge = tan(angulo/4). Subdivide o arco sem substituir por cordas.
+    (if (= fraction 1.0) bulge
+      (progn
+        (setq angle (* (atan bulge) fraction))
+        (/ (sin angle) (cos angle))))
+  )
+
+  (defun b3_densify_segment (e obj index low high spacing
+                           / d0 d1 stations station inserts p fraction nextFraction bulge w0 w1 pointArray)
+    (setq d0 (vlax-curve-getDistAtParam e index)
+          d1 (vlax-curve-getDistAtParam e (1+ index))
+          stations (b3_densify_stations d0 d1 low high spacing))
+    (if stations
+      (progn
+        (setq bulge (vla-GetBulge obj index))
+        (vla-GetWidth obj index 'w0 'w1)
+        ;; Mede todos os pontos ANTES da primeira insercao neste segmento.
+        (foreach station stations
+          (setq p (trans (vlax-curve-getPointAtDist e station) 0 e))
+          (setq inserts (cons (list (/ (- station d0) (- d1 d0)) p) inserts)))
+        (setq nextFraction 1.0)
+        ;; Do fim para o inicio: os indices dos vertices existentes nao mudam.
+        (foreach p inserts
+          (setq fraction (car p)
+                pointArray (vlax-make-safearray vlax-vbDouble '(0 . 1)))
+          (vlax-safearray-fill pointArray (list (car (cadr p)) (cadr (cadr p))))
+          (vla-AddVertex obj (1+ index) (vlax-make-variant pointArray))
+          (vla-SetBulge obj (1+ index) (b3_bulge_fraction bulge (- nextFraction fraction)))
+          (vla-SetWidth obj (1+ index)
+            (+ w0 (* fraction (- w1 w0)))
+            (+ w0 (* nextFraction (- w1 w0))))
+          (setq nextFraction fraction))
+        (vla-SetBulge obj index (b3_bulge_fraction bulge nextFraction))
+        (vla-SetWidth obj index w0 (+ w0 (* nextFraction (- w1 w0))))))
+  )
+
+  (defun b3_density_valid_p (e low high spacing / index count a b valid)
+    (setq index 0 count (fix (vlax-curve-getEndParam e)) valid T)
+    (repeat count
+      (setq a (vlax-curve-getDistAtParam e index)
+            b (vlax-curve-getDistAtParam e (1+ index)))
+      (if (and (> b (+ low 1e-8)) (< a (- high 1e-8))
+               (> (- b a) (+ spacing 1e-6)))
+        (setq valid nil))
+      (setq index (1+ index)))
+    valid
+  )
+
+  (defun b3_densify_interval (e low high spacing / obj lengthBefore startBefore endBefore index)
+    ;; Recebe somente o resultado temporario, nunca as entidades originais.
+    (if (and e (= (cdr (assoc 0 (entget e))) "LWPOLYLINE")
+             (numberp spacing) (> spacing 0.0) (< low high))
+      (progn
+        (setq obj (vlax-ename->vla-object e)
+              lengthBefore (b2_curve_total_length e)
+              startBefore (vlax-curve-getStartPoint e)
+              endBefore (vlax-curve-getEndPoint e)
+              index (fix (vlax-curve-getEndParam e)))
+        (repeat index
+          (setq index (1- index))
+          (b3_densify_segment e obj index low high spacing))
+        (vla-Update obj)
+        (if (and (equal lengthBefore (b2_curve_total_length e) 1e-5)
+                 (equal startBefore (vlax-curve-getStartPoint e) 1e-6)
+                 (equal endBefore (vlax-curve-getEndPoint e) 1e-6)
+                 (b3_density_valid_p e low high spacing))
+          e)))
+  )
+
+  (defun b3_apply_densification (e entry exitPoint / dEntry dExit total low high result)
+    (if (not *BOTA3_DENSIFY*) e
+      (progn
+        (if (and (numberp *BOTA_TRANS_L*) (>= *BOTA_TRANS_L* 0.0)
+                 (numberp *BOTA3_DENSIFY_SEG*) (> *BOTA3_DENSIFY_SEG* 0.0)
+                 entry exitPoint
+                 (b3_point_really_on_curve e entry 1e-4)
+                 (b3_point_really_on_curve e exitPoint 1e-4))
+          (progn
+            (setq dEntry (b2_curve_dist_at_point e entry)
+                  dExit (b2_curve_dist_at_point e exitPoint)
+                  total (b2_curve_total_length e)
+                  low (max 0.0 (- (min dEntry dExit) *BOTA_TRANS_L*))
+                  high (min total (+ (max dEntry dExit) *BOTA_TRANS_L*)))
+            (setq result (b3_densify_interval e low high *BOTA3_DENSIFY_SEG*))))
+        (if (not result)
+          (setq *BOTA3_FILLET_FAIL* "Nao foi possivel densificar o percurso preservando a geometria."))
+        result))
+  )
+  (defun b3_validate_inputs (header headerPick guide guidePick)
+    ;; Valida as entidades sem medir ou limitar o angulo da manobra.
+    (setq *BOTA3_FILLET_FAIL* nil)
+    (if (or (= header guide) (not (b3_open_xy_poly_p header)) (not (b3_open_xy_poly_p guide)))
+      (setq *BOTA3_FILLET_FAIL* "Selecione duas polilinhas abertas no plano XY, em camadas desbloqueadas."))
+    (not *BOTA3_FILLET_FAIL*)
+  )
+
+  ;; Todas as entidades modificadas durante o FILLET sao copias descartaveis.
+  (defun b3_track (e)
+    (if (and e (not (member e b3Temps))) (setq b3Temps (cons e b3Temps)))
+    e
+  )
+
+  (defun b3_open_xy_poly_p (e / data flags normal layer)
+    (setq data (entget e) flags (cdr (assoc 70 data))
+          normal (cdr (assoc 210 data)) layer (tblsearch "LAYER" (cdr (assoc 8 data))))
+    (and (member (cdr (assoc 0 data)) '("LWPOLYLINE" "POLYLINE"))
+         (= 0 (logand (if flags flags 0) 127))
+         (or (not normal) (equal normal '(0.0 0.0 1.0) 1e-8))
+         (= 0 (logand 4 (cdr (assoc 70 layer))))
+         (equal (caddr (vlax-curve-getStartPoint e)) 0.0 1e-6)
+         (equal (caddr (vlax-curve-getEndPoint e)) 0.0 1e-6))
+  )
+
+  (defun b3_end_on (e p)
+    (or (equal (vlax-curve-getStartPoint e) p 1e-4)
+        (equal (vlax-curve-getEndPoint e) p 1e-4))
+  )
+
+  (defun b3_join_chain (entities / base rest pending e a b joined progress)
+    ;; JOIN so recebe objetos com extremos coincidentes; nunca cria pontes.
+    (setq base (car entities) rest (cdr entities) progress T)
+    (while (and base rest progress)
+      (setq pending nil progress nil)
+      (foreach e rest
+        (if (and (entget base) (entget e))
+          (progn
+            (setq a (vlax-curve-getStartPoint e) b (vlax-curve-getEndPoint e))
+            (if (or (b3_end_on base a) (b3_end_on base b))
+              (progn
+                (b3_join_two base e)
+                (setq joined
+                  (if (and (entget base) (not (entget e))) base
+                    (if (and (entget e) (not (entget base))) e nil)))
+                (if joined (setq base joined progress T)
+                  (setq pending (cons e pending))))
+              (setq pending (cons e pending))))))
+      (setq rest (reverse pending)))
+    (if (and base (entget base) (not rest)) base nil)
+  )
+
+  (defun b3_lwpoly_styled (pts style / data code value)
+    ;; LWPOLYLINE abierta con capa/color/tipo de linea de la cabecera.
+    (setq data (list '(0 . "LWPOLYLINE") '(100 . "AcDbEntity")))
+    (foreach code '(8 6 62 420 440 48 370)
+      (if (setq value (assoc code (entget style)))
+        (setq data (append data (list value)))))
+    (setq data (append data (list '(100 . "AcDbPolyline") (cons 90 (length pts)) '(70 . 0))))
+    (foreach value pts
+      (setq data (append data (list (cons 10 (list (car value) (cadr value))) '(42 . 0.0)))))
+    (b3_track (entmakex data))
+  )
+
+  (defun b3_guide_pieces (guide / n i a b da db bulge len k j p q d0 d1 out)
+    ;; Tramos rectos de la guia: (A B distA distB).
+    ;; Los tramos con bulge se discretizan en cuerdas de ~0.25.
+    (setq n (fix (vlax-curve-getEndParam guide)) i 0)
+    (repeat n
+      (setq a  (b3_pt3 (vlax-curve-getPointAtParam guide i))
+            b  (b3_pt3 (vlax-curve-getPointAtParam guide (1+ i)))
+            da (vlax-curve-getDistAtParam guide i)
+            db (vlax-curve-getDistAtParam guide (1+ i))
+            bulge (vl-catch-all-apply 'vla-getBulge
+                    (list (vlax-ename->vla-object guide) i)))
+      (if (or (vl-catch-all-error-p bulge) (< (abs bulge) 1e-9))
+        (setq out (cons (list a b da db) out))
+        (progn
+          (setq k (max 2 (b3_ceil (/ (- db da) 0.25))) j 0 p a d0 da)
+          (repeat k
+            (setq j (1+ j)
+                  d1 (+ da (* (- db da) (/ (float j) k)))
+                  q (if (= j k) b (b3_pt3 (vlax-curve-getPointAtDist guide d1))))
+            (setq out (cons (list p q d0 d1) out) p q d0 d1))))
+      (setq i (1+ i)))
+    (reverse out)
+  )
+
+  (defun b3_selected_guide_pieces (guide pick / pieces pickDist picked reference direction pc run selected stopped)
+    ;; Isola o passe CONTINUO que contem o clique. O retorno pode estar perto
+    ;; no desenho, mas nao pertence a este passe. Nao salta por cima de uma
+    ;; dobra para admitir outro passe posterior com a mesma orientacao.
+    (setq pieces (b3_guide_pieces guide)
+          pickDist (b2_curve_dist_at_point guide pick))
+    (foreach pc pieces
+      (if (and pickDist (not picked)
+               (>= pickDist (- (nth 2 pc) 1e-6))
+               (<= pickDist (+ (nth 3 pc) 1e-6))
+               (b3_unit (b3_v- (cadr pc) (car pc))))
+        (setq picked pc)))
+    (if picked
+      (progn
+        (setq reference (b3_unit (b3_v- (cadr picked) (car picked))))
+        (foreach pc pieces
+          (if (not stopped)
+            (progn
+              (setq direction (b3_unit (b3_v- (cadr pc) (car pc))))
+              (if direction
+                (if (> (b3_dot direction reference) 1e-6)
+                  (progn
+                    (setq run (cons pc run))
+                    (if (equal (nth 2 pc) (nth 2 picked) 1e-8) (setq selected T)))
+                  (if selected (setq stopped T) (setq run nil)))))))
+        (if selected (reverse run))))
+  )
+
+  (defun b3_joint_on_selected_guide (header guide headerPick pieces / low high points p d valid)
+    ;; O cruzamento tambem deve pertencer ao passe clicado, inclusive quando
+    ;; a cabeceira cruza varios passes da mesma polilinha.
+    (if pieces
+      (progn
+        (setq low (nth 2 (car pieces)) high (nth 3 (last pieces))
+              points (b2_real_intersections header guide))
+        (foreach p points
+          (setq d (b2_curve_dist_at_point guide p))
+          (if (and d (>= d (- low 1e-4)) (<= d (+ high 1e-4)))
+            (setq valid (cons p valid))))
+        (b2_best_point valid headerPick)))
+  )
+
+  (defun b3_local_guide_from_pick (header guide headerPick guidePick radius spacing
+                                 / pieces joint d low high station points)
+    ;; Limita a copia usada pelo OFFSET ao mesmo passe do FILLET. Somente
+    ;; amostra pontos; nao altera a guia nem os helpers de corte de BOTA2.
+    (setq pieces (b3_selected_guide_pieces guide guidePick)
+          joint (b3_joint_on_selected_guide header guide headerPick pieces))
+    (if joint
+      (progn
+        (setq d (b2_curve_dist_at_point guide joint)
+              low (max (nth 2 (car pieces)) (- d radius))
+              high (min (nth 3 (last pieces)) (+ d radius))
+              station low)
+        (while (< station (- high 1e-8))
+          (setq points (cons (b3_pt3 (vlax-curve-getPointAtDist guide station)) points)
+                station (+ station spacing)))
+        (setq points (cons (b3_pt3 (vlax-curve-getPointAtDist guide high)) points))
+        (if (> (length points) 1) (b3_lwpoly_open (reverse points) nil))))
+  )
+
+    (defun b3_analytic_fillet_ls (header guide headerPick guidePick cen cr anchor count fr spacing turnData
+                               / joint dJoint dPick gsgn guideEnd dirKeep step travelMax pc pa pb da db
+                                 u nrm len side a0 w wu disc sq root tt f pG dG vcf pCirc arcDir sweep
+                                 radG arrTan tdir travel ext cands cand best nPieces pts k p filPts
+                                 pGx copy parts tail arcEnt e
+                                 ls dctr cph sph sgnA nc nopt pEx pFl t1v pFin guidePieces)
+    ;; cen/cr = centro y radio del giro; fr = radio del fillet.
+    ;; ls = longitud de la reta entre el final del giro y el inicio del fillet (*B3_LS*).
+    (setq guidePieces (b3_selected_guide_pieces guide guidePick)
+          joint (b3_joint_on_selected_guide header guide headerPick guidePieces))
+    (cond
+      ((not joint)
+       (setq *BOTA3_FILLET_FAIL* "Nao foi possivel localizar o cruzamento cabeceira x guia.")
+       nil
+      )
+      (T
+       (setq dJoint    (b2_curve_dist_at_point guide joint)
+             dPick     (b2_curve_dist_at_point guide guidePick)
+             gsgn      (if (> dPick dJoint) 1.0 -1.0)
+             guideEnd  (if (> gsgn 0.0)
+                         (vlax-curve-getEndPoint guide)
+                         (vlax-curve-getStartPoint guide))
+             dirKeep   (- (nth 3 turnData))
+             step      (/ (* 2.0 pi) count)
+             travelMax (- (* 2.0 pi) (* 2.0 step) 1e-6)
+             nPieces   0
+             ls        (if *B3_LS* (max 0.0 *B3_LS*) 0.0)
+             dctr      (sqrt (+ (* (+ cr fr) (+ cr fr)) (* ls ls)))
+             cph       (/ (+ cr fr) dctr)
+             sph       (/ ls dctr)
+             cands     nil)
+
+       ;; ---- Candidatos ------------------------------------------------
+       (foreach pc guidePieces
+         (setq pa  (car pc)
+               pb  (cadr pc)
+               da  (nth 2 pc)
+               db  (nth 3 pc)
+               len (distance pa pb)
+               u   (b3_unit (b3_v- pb pa)))
+         (if (and u (> len 1e-9)
+                  (< (distance pa cen) (+ dctr fr len 1.0)))
+           (progn
+             (setq nPieces (1+ nPieces)
+                   nrm     (b3_rot90ccw u))
+             (foreach side '(1.0 -1.0)
+               ;; Centro del fillet: paralela a la guia a distancia fr
+               ;; y a distancia dctr del centro del giro.
+               (setq a0   (b3_v+ pa (b3_v* (* side fr) nrm))
+                     w    (b3_v- a0 cen)
+                     wu   (b3_dot w u)
+                     disc (- (* wu wu) (- (b3_dot w w) (* dctr dctr))))
+               (if (>= disc -1e-9)
+                 (progn
+                   (setq sq (sqrt (max 0.0 disc)))
+                   (foreach root (list (+ (- wu) sq) (- (- wu) sq))
+                     (if (and (>= root -1e-6) (<= root (+ len 1e-6)))
+                       (progn
+                         (setq tt  (max 0.0 (min len root))
+                               f   (b3_v+ a0 (b3_v* tt u))
+                               pG  (b3_v+ pa (b3_v* tt u))
+                               dG  (+ da (* (- db da) (/ tt len)))
+                               vcf (b3_unit (b3_v- f cen)))
+                         (if (and vcf (>= (* gsgn (- dG dJoint)) -1e-4))
+                           (progn
+                             ;; Tangente interna comun:
+                             ;; P1 = cen + cr*nc (fin del giro)
+                             ;; P2 = f - fr*nc   (inicio del fillet)
+                             (setq nopt nil)
+                             (foreach sgnA '(1.0 -1.0)
+                               (setq nc  (b3_v+ (b3_v* cph vcf)
+                                                (b3_v* (* sgnA sph) (b3_rot90ccw vcf)))
+                                     pEx (b3_v+ cen (b3_v* cr nc))
+                                     pFl (b3_v- f (b3_v* fr nc))
+                                     t1v (if (> dirKeep 0.0) (b3_rot90ccw nc) (b3_rot90cw nc)))
+                               (if (>= (b3_dot (b3_v- pFl pEx) t1v) (- ls 1e-6))
+                                 (setq nopt (list pEx pFl))
+                               )
+                             )
+                             (if nopt
+                               (progn
+                                 (setq pCirc  (car nopt)
+                                       pFin   (cadr nopt)
+                                       arcDir (- dirKeep)
+                                       sweep  (b3_arc_delta_dir f pFin pG arcDir)
+                                       travel (b3_arc_delta_dir cen anchor pCirc dirKeep)
+                                       radG   (b3_unit (b3_v- pG f))
+                                       arrTan (if (> arcDir 0.0) (b3_rot90ccw radG) (b3_rot90cw radG))
+                                       tdir   (b3_v* gsgn u))
+                                 (if (and (> sweep 1e-6) (<= sweep (+ pi 1e-6))
+                                          (> travel 0.05) (<= travel travelMax)
+                                          (> (b3_dot arrTan tdir) 0.999))
+                                   (progn
+                                     (setq ext (b3_fillet_externality cen cr f fr pFin pG arcDir))
+                                     (setq cands
+                                       (cons
+                                         (list ext
+                                               (+ (* cr travel) ls (* fr sweep))
+                                               f pCirc pG arcDir sweep travel pFin)
+                                         cands))
+                                   )
+                                 )
+                               )
+                             )
+                           )
+                         )
+                       )
+                     )
+                   )
+                 )
+               )
+             )
+           )
+         )
+       )
+
+       (if (not cands)
+         (progn
+           (setq *BOTA3_FILLET_FAIL*
+             (strcat "Nenhum fillet de raio " (rtos fr 2 3)
+                     " com reta de " (rtos ls 2 3)
+                     ", tangente ao giro e a guia no braco indicado (trechos avaliados: "
+                     (itoa nPieces) ")."))
+           nil
+         )
+         (progn
+           ;; ---- Mejor candidato: max externalidad; empate -> menor recorrido
+           (setq best (car cands))
+           (foreach cand (cdr cands)
+             (if (or (> (car cand) (+ (car best) 0.001))
+                     (and (<= (abs (- (car cand) (car best))) 0.001)
+                          (< (cadr cand) (cadr best))))
+               (setq best cand)
+             )
+           )
+           (setq f      (nth 2 best)
+                 pCirc  (nth 3 best)
+                 pG     (nth 4 best)
+                 arcDir (nth 5 best)
+                 travel (nth 7 best)
+                 pFin   (nth 8 best))
+
+           ;; ---- Giro (vertices del circulo) + RETA + fillet
+           (setq pGx (b3_closest_point guide pG)
+                 k   0
+                 pts nil)
+           (foreach p (nth 4 turnData)
+             (if (< (* k step) (- travel 1e-6))
+               (setq pts (cons p pts))
+             )
+             (setq k (1+ k))
+           )
+           (setq filPts (b3_arc_points_center f fr pFin pG arcDir spacing))
+           ;; pCirc = fin del giro; pFin = inicio del fillet. Entre ambos queda la reta.
+           (setq pts
+             (append (reverse pts)
+                     (if (> ls 1e-6) (list pCirc))
+                     filPts))
+           ;; El ultimo vertice pasa a ser exactamente el punto sobre la guia.
+           (setq pts (append (reverse (cdr (reverse pts))) (list pGx)))
+           (setq arcEnt (b3_lwpoly_styled pts header))
+
+           ;; ---- Brazo conservado de la guia (conserva vertices y bulges)
+           (setq copy  (b2_copy_entity guide)
+                 parts (if copy (b2_split_copy_at_point copy pGx)))
+           (setq tail
+             (cond
+               ((and (car parts)  (b3_end_on (car parts)  guideEnd)) (car parts))
+               ((and (cadr parts) (b3_end_on (cadr parts) guideEnd)) (cadr parts))
+             )
+           )
+           (foreach e parts
+             (if (/= e tail) (b3_delete_ent e))
+           )
+
+           (if (and arcEnt tail)
+             (progn
+               (setq arcEnt (b3_join_chain (list arcEnt tail)))
+               (if arcEnt (list arcEnt pGx)))
+             (progn
+               (setq *BOTA3_FILLET_FAIL* "Nao foi possivel separar o braco conservado da guia.")
+               nil
+             )
+           )
+         )
+       )
+      )
+    )
+  )
+
+  (defun b3_analytic_fillet (header guide headerPick guidePick cen cr anchor count fr spacing turnData
+                            / k lMax f res)
+    ;; Reta automatica: k * radio de giro, reduciendo hasta que exista solucion.
+    ;; Prueba 100%, 75%, 50%, 25% y 0% de la longitud objetivo.
+    (setq k    (if *BOTA_RECTO_K* *BOTA_RECTO_K* 1.0)
+          lMax (* k cr)
+          f    1.0
+          res  nil)
+    (while (and (not res) (>= f 0.0))
+      (setq *B3_LS* (* f lMax))
+      (setq res
+        (b3_analytic_fillet_ls header guide headerPick guidePick
+                               cen cr anchor count fr spacing turnData))
+      (if (not res)
+        (setq f
+          (cond
+            ((> f 0.2) (- f 0.25))
+            ((> f 0.0) 0.0)
+            (T -1.0)
+          )
+        )
+      )
+    )
+    (if res
+      (progn
+        (setq *BOTA3_FILLET_FAIL* nil)
+        (prompt
+          (strcat "\nReta entre curvas aplicada: " (rtos *B3_LS* 2 3)
+                  " (objetivo " (rtos lMax 2 3) ")"))
+      )
+    )
+    res
+  )
+
+  (defun b3_stage (header guide headerPick guidePick center radius anchor cutRef count filletRadius spacing outerRadius
+                  / turnData turn output copy parts keep other outer result maneuverData exitPoint)
+    (if (not (b3_validate_inputs header headerPick guide guidePick))
+      nil
+      (progn
+        (setq turnData (b3_circle_gap_directional center radius anchor cutRef count nil))
+        (setq turn (b3_track (car turnData)))
+        (setq maneuverData (if turn (b3_analytic_fillet header guide headerPick guidePick center radius
+                                                  anchor count filletRadius spacing turnData)))
+        (setq output (car maneuverData) exitPoint (cadr maneuverData))
+        (if (not output)
+          (setq *BOTA3_FILLET_FAIL*
+            (if *BOTA3_FILLET_FAIL*
+              *BOTA3_FILLET_FAIL*
+              "O raio de fillet nao cabe no braco indicado sem prolongar a guia ou alterar o giro."))
+          (progn
+            (setq copy (b2_copy_entity header) parts (if copy (b2_split_copy_at_point copy anchor)))
+            (setq keep (if parts (b3_select_opposite_pside (car parts) (cadr parts) anchor (nth 4 turnData))))
+            (setq other (if (= keep (car parts)) (cadr parts) (car parts)))
+            (setq result (if keep (b3_join_chain (list output keep))))
+            (if result (setq result (b3_apply_densification result anchor exitPoint)))
+            (if (not result)
+              (if (not *BOTA3_FILLET_FAIL*)
+                (setq *BOTA3_FILLET_FAIL* "Nao foi possivel unir a cabeceira a manobra; os originais foram preservados."))
+              (progn
+                (setq outer (b3_track (b3_circle_entity center outerRadius 6)))
+                (if outer (setq b3Outputs (list result outer other))
+                  (setq *BOTA3_FILLET_FAIL* "Nao foi possivel criar a referencia externa."))))))))
+    (if b3Outputs
+      (progn
+        ;; entdel permite restaurar o primeiro original se o segundo falhar.
+        (setq b3Originals (list header guide))
+        (if (and (entdel header) (entdel guide) (not (entget header)) (not (entget guide)))
+          (setq b3Committed T)
+          (setq *BOTA3_FILLET_FAIL* "Nao foi possivel substituir os originais."))))
+    (if b3Committed b3Outputs nil)
+  )
+
+  (defun b3_pipeline (header guide headerPick guidePick center radius anchor cutRef count filletRadius spacing outerRadius
+                      / b3Temps b3Outputs b3Originals b3Committed b2Temps saved pair doc mark result e)
+    (_bota2_define_helpers)
+    (setq *BOTA3_FILLET_FAIL* nil)
+    (foreach pair '("CMDECHO" "OSMODE" "PEDITACCEPT")
+      (setq saved (cons (cons pair (getvar pair)) saved)))
+    (setq doc  (vla-get-ActiveDocument (vlax-get-acad-object)))
+    (setq mark (vl-catch-all-apply 'vla-StartUndoMark (list doc)))
+    (setvar "CMDECHO" 0)
+    (setvar "OSMODE" 0)
+    (setq result (vl-catch-all-apply 'b3_stage
+      (list header guide headerPick guidePick center radius anchor cutRef count filletRadius spacing outerRadius)))
+    (if (vl-catch-all-error-p result)
+      (setq *BOTA3_FILLET_FAIL* (vl-catch-all-error-message result)))
+    (if (not b3Committed)
+      (foreach e b3Originals
+        (if (not (entget e)) (vl-catch-all-apply 'entdel (list e)))))
+    (foreach e (append b3Temps b2Temps)
+      (if (not (and b3Committed (member e b3Outputs))) (b3_delete_ent e)))
+    (foreach pair saved (setvar (car pair) (cdr pair)))
+    (if (not (vl-catch-all-error-p mark)) (vla-EndUndoMark doc))
+    (if b3Committed b3Outputs nil)
+  )
+)
+
+(defun b3_command_body ()
+  (_bota_session_pull)
   (setq tol 1e-8)
 
   ;; Radio fijo de trabajo.
@@ -5362,19 +6175,22 @@
   (if (not *BOTA_FILLET_R*)     (setq *BOTA_FILLET_R* 30.000))
   (if (not *BOTA_FILLET_SEG*)   (setq *BOTA_FILLET_SEG* 1.500))
 
+
+  ;; Factor de la reta automatica entre giro y fillet (x radio de giro)
+  (if (not *BOTA_RECTO_K*)      (setq *BOTA_RECTO_K* 1.0))
+
   (setq oldLuprec (getvar "LUPREC"))
   (setvar "LUPREC" 3)
 
   (prompt "\nBOTA3 - Manobra com base BOTA2 + FILLET automatico para linha guia.")
-  (prompt "\nSelecione a cabeceira perto da zona desejada: ")
-  (setq sel (entsel))
+  (setq sel (entsel "\nSelecione a cabeceira perto da zona desejada: "))
 
   (if (not sel)
     (prompt "\nNenhuma cabeceira selecionada.")
     (progn
 
       (setq ent   (car sel))
-      (setq pPick (b3_pt3 (cadr sel)))
+      (setq pPick (b3_pt3 (trans (cadr sel) 1 0)))
 
       (setq pCab
         (vl-catch-all-apply
@@ -5389,16 +6205,20 @@
 
           (setq pCab (b3_pt3 pCab))
 
-          (prompt "\nSelecione a linha guia: ")
-          (setq sel (entsel))
+          (setq sel (entsel "\nSelecione a linha guia: "))
 
           (if (not sel)
             (prompt "\nNenhuma linha guia selecionada.")
             (progn
 
               (setq guia      (car sel))
-              (setq pGuiaPick (b3_pt3 (cadr sel)))
-              (setq pSide     (_bota_side_from_picks pPick pGuiaPick))
+              (setq pGuiaPick (b3_pt3 (trans (cadr sel) 1 0)))
+              ;; Referencia completa do clique, como em BOTA2. Misturar X da
+              ;; cabecaria com Y da guia torna o lado dependente da orientacao.
+              (setq pSide pGuiaPick)
+
+              (if (not (b3_validate_inputs ent pCab guia pGuiaPick))
+                (progn (prompt (strcat "\n" *BOTA3_FILLET_FAIL*)) (exit)))
 
               (if (not pSide)
                 (prompt "\nNao foi possivel definir o lado a partir dos cliques na cabeceira e na guia.")
@@ -5414,7 +6234,7 @@
                   ;; R     = ajustar los dos radios
                   ;; -------------------------------------------------
 
-                  (initget "C B R")
+                  (initget "C B R L")
                   (setq cfg
                     (getkword
                       (strcat
@@ -5425,8 +6245,10 @@
                         " | Seg.Circulo=" (rtos *BOTA_DISTSEG* 2 3)
                         " | Fillet R=" (rtos *BOTA_FILLET_R* 2 3)
                         " | Seg.Fillet=" (rtos *BOTA_FILLET_SEG* 2 3)
-                        " | Con.Cabeceira=" (if *BOTA_CONECTAR_CAB* "Sim" "Nao")
-                        "\nPressione Enter para continuar ou [R] raios / [C] gerais / [B] fillet: "
+                        " | Reta auto (x R giro)=" (rtos *BOTA_RECTO_K* 2 2)
+                        " | Densificacao=" (if *BOTA3_DENSIFY* "Sim" "Nao")
+                        " | Uniao completa=Sim"
+                        "\nPressione Enter para continuar ou [R] raios / [C] gerais / [B] fillet / [L] reta: "
                       )
                     )
                   )
@@ -5444,7 +6266,7 @@
                           )
                         )
                         (if rGiro
-                          (setq *BOTA_RGIRO* rGiro)
+                          (progn (setq *BOTA_RGIRO* rGiro) (_bota_session_publish))
                         )
 
                         (setq tamImpl
@@ -5457,7 +6279,7 @@
                           )
                         )
                         (if tamImpl
-                          (setq *BOTA_IMPL* tamImpl)
+                          (progn (setq *BOTA_IMPL* tamImpl) (_bota_session_publish))
                         )
 
                         (setq seguridad
@@ -5470,7 +6292,7 @@
                           )
                         )
                         (if seguridad
-                          (setq *BOTA_SEGURIDAD* seguridad)
+                          (progn (setq *BOTA_SEGURIDAD* seguridad) (_bota_session_publish))
                         )
 
                         (setq distSeg
@@ -5483,7 +6305,7 @@
                           )
                         )
                         (if distSeg
-                          (setq *BOTA_DISTSEG* distSeg)
+                          (progn (setq *BOTA_DISTSEG* distSeg) (_bota_session_publish))
                         )
                       )
                     )
@@ -5500,7 +6322,7 @@
                           )
                         )
                         (if filletR
-                          (setq *BOTA_FILLET_R* filletR)
+                          (progn (setq *BOTA_FILLET_R* filletR) (_bota_session_publish))
                         )
 
                         (setq filletDistSeg
@@ -5513,7 +6335,7 @@
                           )
                         )
                         (if filletDistSeg
-                          (setq *BOTA_FILLET_SEG* filletDistSeg)
+                          (progn (setq *BOTA_FILLET_SEG* filletDistSeg) (_bota_session_publish))
                         )
                       )
                     )
@@ -5530,7 +6352,7 @@
                           )
                         )
                         (if rGiro
-                          (setq *BOTA_RGIRO* rGiro)
+                          (progn (setq *BOTA_RGIRO* rGiro) (_bota_session_publish))
                         )
 
                         (setq filletR
@@ -5543,7 +6365,24 @@
                           )
                         )
                         (if filletR
-                          (setq *BOTA_FILLET_R* filletR)
+                          (progn (setq *BOTA_FILLET_R* filletR) (_bota_session_publish))
+                        )
+                      )
+                    )
+
+                    ((= cfg "L")
+                      (progn
+                        (setq tmpL
+                          (getreal
+                            (strcat
+                              "\nFator da reta (x raio de giro, 0 = sem reta) <"
+                              (rtos *BOTA_RECTO_K* 2 2)
+                              ">: "
+                            )
+                          )
+                        )
+                        (if tmpL
+                          (progn (setq *BOTA_RECTO_K* (max 0.0 tmpL)) (_bota_session_publish))
                         )
                       )
                     )
@@ -5590,13 +6429,19 @@
                       (setq *BOTA_FILLET_R*   filletR)
                       (setq *BOTA_FILLET_SEG* filletDistSeg)
 
-                      ;; As duas curvas sao limitadas a zona da manobra.
+                      ;; Mesmo cruzamento e janela da cabecaria usados como
+                      ;; referencia de BOTA2; o clique nao desloca a busca para
+                      ;; a outra solucao do circulo.
+                      (setq pJoint
+                        (b3_joint_on_selected_guide ent guia pCab
+                          (b3_selected_guide_pieces guia pGuiaPick)))
                       (setq guiaLocal
-                        (b3_local_poly_from_curve guia pCab radioTrabajo stepGuia)
+                        (b3_local_guide_from_pick ent guia pCab pGuiaPick radioTrabajo stepGuia)
                       )
 
                       (setq cabLocal
-                        (b3_local_poly_from_curve ent pCab radioTrabajo stepCab)
+                        (if pJoint
+                          (b3_local_poly_from_curve ent pJoint (* 2.0 tamImpl) stepCab))
                       )
 
                       (if (or (not guiaLocal) (not cabLocal))
@@ -5610,11 +6455,11 @@
                           ;; Offsets temporales:
                           ;; cabecera hacia el lado indicado, guia hacia el lado contrario.
                           (setq offCab
-                            (b3_offset_select cabLocal offCabDist pSide)
+                            (b3_offset_select cabLocal offCabDist pGuiaPick)
                           )
 
                           (setq offGuia
-                            (b3_offset_select_opposite guiaLocal offGuiaDist pSide)
+                            (b3_offset_select_opposite guiaLocal offGuiaDist pCab)
                           )
 
                           (if (or (not offCab) (not offGuia))
@@ -5628,25 +6473,9 @@
                             (progn
 
                               ;; Punto calculado por interseccion de offsets.
-                              ;; Se toma la interseccion mas cercana al click sobre la cabecera.
+                              ;; Mesmo criterio de BOTA2: mais perto do cruzamento selecionado.
                               (setq pVert
-                                (b3_intersection_best offCab offGuia pCab)
-                              )
-
-                              ;; Direccion de corte/conexion:
-                              ;; opuesta al offset real de la guia.
-                              ;; pVert esta sobre offGuia; pGuideBase esta sobre guiaLocal.
-                              (setq pGuideBase
-                                (if pVert
-                                  (b3_closest_point guiaLocal pVert)
-                                  nil
-                                )
-                              )
-                              (setq vCutSide
-                                (if pGuideBase
-                                  (b3_unit (b3_v- pGuideBase pVert))
-                                  nil
-                                )
+                                (b3_intersection_best offCab offGuia pJoint)
                               )
 
                               ;; Borra auxiliares temporales que ya no usa el solver.
@@ -5654,7 +6483,7 @@
                               (b3_delete_ent offGuia)
                               (b3_delete_ent guiaLocal)
 
-                              (if (or (not pVert) (not vCutSide))
+                              (if (not pVert)
                                 (progn
                                   (if cabLocal (b3_delete_ent cabLocal))
                                   (prompt "\nNao foi encontrada intersecao valida entre os offsets locais.")
@@ -5783,19 +6612,21 @@
                                                                 (b3_v+ pTang (b3_v* (* side rGiro) n))
                                                               )
 
-                                                              ;; Puntuacion: cercania al click inicial en cabecera.
-                                                              (setq score (distance pTang pCab))
+                                                              ;; BOTA2 elige el centro mas cercano al cruce.
+                                                              ;; La otra raiz puede invertir el giro aunque
+                                                              ;; su tangencia este mas cerca del mouse.
+                                                              (setq score (distance centro pJoint))
 
-                                                              ;; Radio fijo de trabajo:
-                                                              ;; evita que la bota se genere lejos de la zona clicada.
-                                                              (if (<= score radioTrabajo)
+                                                              ;; La tangencia queda en la misma ventana
+                                                              ;; de dos implementos a cada lado del cruce.
+                                                              (if (<= (distance pTang pJoint) (* 2.0 tamImpl))
                                                                 (setq candidates
                                                                   (cons
                                                                     (list
                                                                       score
                                                                       pTang
                                                                       centro
-                                                                      (b3_v+ pTang vCutSide)
+                                                                      (b2_opposite_point pTang pVert)
                                                                     )
                                                                     candidates
                                                                   )
@@ -5816,7 +6647,7 @@
                                         (setq i (1+ i))
                                       )
 
-                                      ;; Elige la solucion mas cercana al click de cabecera.
+                                      ;; Mantem o criterio do centro usado por BOTA2.
                                       (if candidates
                                         (progn
 
@@ -5841,165 +6672,27 @@
                                           (if (and pTang vCenter)
                                             (setq centro (b3_v+ pTang (b3_v* rGiro vCenter)))
                                           )
-                                          (setq pCutRef (b3_v+ pTang vCutSide))
+                                          (setq pCutRef (b2_opposite_point pTang pVert))
                                           (if cabLocal (b3_delete_ent cabLocal))
 
                                           ;; Segmentacion base del circulo interno
                                           (setq nSegGiro (b3_nseg_inscribed rGiro distSeg))
 
-                                          ;; -------------------------------------------------
-                                          ;; 1) GENERA LA BASE IGUAL QUE BOTA2
-                                          ;; -------------------------------------------------
-                                          ;; Primero crea el arco interno con el hueco hacia
-                                          ;; el lado contrario al offset real de la guia.
+                                          ;; Executa FILLET, recortes e uniao em copias.
+                                          ;; O clique original na guia define o braco conservado.
                                           (setq giroData
-                                            (b3_circle_gap_directional
-                                              centro rGiro pTang pCutRef nSegGiro nil
-                                            )
-                                          )
-
-                                          (setq entGiro (car giroData))
-                                          (setq pGapIni (cadr giroData)) ;; = pTang
-                                          (setq pGapFin (caddr giroData))
-                                          (setq ptsGiro (nth 4 giroData))
-
-                                          ;; -------------------------------------------------
-                                          ;; 2) FILLET REAL DO AUTOCAD, COMO NO PROCESSO MANUAL
-                                          ;; -------------------------------------------------
-                                          ;; Usa a guia original para que o FILLET faca o TRIM
-                                          ;; da linha de guiado visivel. Os pontos de selecao
-                                          ;; simulam o clique manual mostrado no video.
-                                          (setq pGuiaPick
-                                            (if pGuideBase
-                                              (b3_closest_point guia pGuideBase)
-                                              nil
-                                            )
-                                          )
-
-                                          (setq *BOTA3_FILLET_FAIL*
-                                            (cond
-                                              ((not entGiro)
-                                                "a bota interna nao foi criada antes do FILLET."
-                                              )
-                                              ((not pGuiaPick)
-                                                "nao foi possivel calcular o ponto de selecao na linha guia original."
-                                              )
-                                              ((not pGapFin)
-                                                "nao foi possivel calcular o ponto de selecao na bota interna."
-                                              )
-                                              (T nil)
-                                            )
-                                          )
-
-                                          (setq entFillet
-                                            (if (and entGiro pGuiaPick pGapFin)
-                                              (b3_fillet_direct
-                                                guia pGuiaPick entGiro pGapFin filletR
-                                              )
-                                              nil
-                                            )
-                                          )
-
-                                          (if (and entFillet entGiro (entget entGiro))
-                                            (progn
-                                              (setq joinFilletOk
-                                                (b3_join_two entGiro entFillet)
-                                              )
-                                              (if (not joinFilletOk)
-                                                (prompt
-                                                  "\nAviso: FILLET criado, mas nao foi possivel unir a entidade do FILLET a bota."
-                                                )
-                                              )
-                                            )
-                                            (progn
-                                              (if (and entFillet entGiro (not (entget entGiro)))
-                                                (setq *BOTA3_FILLET_FAIL*
-                                                  "AutoCAD criou a entidade do FILLET, mas a entidade da bota interna deixou de estar valida depois do recorte."
-                                                )
-                                              )
-                                              (if entGiro (b3_delete_ent entGiro))
-                                              (if entFillet (b3_delete_ent entFillet))
-                                              (setq entGiro nil)
-                                              (prompt
-                                                (strcat
-                                                  "\nNao foi possivel executar FILLET automatico entre a bota e a linha guia."
-                                                  (if *BOTA3_FILLET_FAIL*
-                                                    (strcat "\nMotivo: " *BOTA3_FILLET_FAIL*)
-                                                    "\nMotivo: AutoCAD nao informou uma causa especifica."
-                                                  )
-                                                )
-                                              )
-                                            )
-                                          )
-
-                                          ;; -------------------------------------------------
-                                          ;; 3) CONECTA EL CIRCULO A LA CABECERA
-                                          ;; -------------------------------------------------
-                                          ;; Se mantiene exactamente la regla ya validada en BOTA2:
-                                          ;; BREAKATPOINT en pTang y JOIN siempre con el tramo
-                                          ;; coerente com o lado do giro indicado pelo usuario.
-                                          (if (and entGiro (entget entGiro))
-                                            (progn
-                                              (setq lastBefore (entlast))
-                                              (b3_breakatpoint ent pTang)
-                                              (setq lastAfter (entlast))
-
-                                              (setq entCab2
-                                                (if (and lastAfter (/= lastAfter lastBefore))
-                                                  lastAfter
-                                                  nil
-                                                )
-                                              )
-
-                                              (if *BOTA_CONECTAR_CAB*
-                                                (progn
-                                                  (setq entCabJoin
-                                                    (b3_select_opposite_pside
-                                                      ent entCab2 pTang ptsGiro
-                                                    )
-                                                  )
-
-                                                  (setq joinOk
-                                                    (if entCabJoin
-                                                      (b3_join_two entGiro entCabJoin)
-                                                      nil
-                                                    )
-                                                  )
-
-                                                  (if (not entCabJoin)
-                                                    (prompt
-                                                      "\nAviso: nao foi possivel identificar o trecho correto da cabeceira."
-                                                    )
-                                                    (if (not joinOk)
-                                                      (prompt
-                                                        "\nAviso: a cabeceira correta foi identificada, mas o AutoCAD nao conseguiu executar JOIN."
-                                                      )
-                                                    )
-                                                  )
-                                                )
-                                                (prompt "\nConexao com cabeceira desativada para BOTA3.")
-                                              )
-                                            )
-                                          )
-
-                                          (if (and entGiro (entget entGiro))
-                                            (progn
-                                              ;; Circulo externo normal, morado.
-                                              (setq entBarra
-                                                (b3_circle_entity centro rBarra 6)
-                                              )
-
-                                              (prompt
-                                                (strcat
-                                                  "\nRaio Interno: " (rtos rGiro 2 3)
-                                                  " - Raio Externo: " (rtos rBarra 2 3)
-                                                  " - Fillet: " (rtos filletR 2 3)
-                                                  " - Seg.Fillet: " (rtos filletDistSeg 2 3)
-                                                )
-                                              )
-                                            )
-                                          )
-
+                                            (b3_pipeline ent guia pCab pGuiaPick centro rGiro
+                                              pTang pCutRef nSegGiro filletR filletDistSeg rBarra))
+                                          (if giroData
+                                            (prompt
+                                              (strcat "\nBOTA3 concluido: cabeceira, giro, fillet e guia unidos."
+                                                "\nRaio Interno: " (rtos rGiro 2 3)
+                                                " - Raio Externo: " (rtos rBarra 2 3)
+                                                " - Fillet: " (rtos filletR 2 3)))
+                                            (prompt
+                                              (strcat "\nBOTA3: "
+                                                (if *BOTA3_FILLET_FAIL* *BOTA3_FILLET_FAIL* "Falha no fillet.")
+                                                " Os originais foram preservados.")))
                                         )
                                         (progn
                                           (if cabLocal (b3_delete_ent cabLocal))
@@ -6034,11 +6727,11 @@
 )
 
 ;; ============================================================
-;; COMANDO BOTAF
+;; COMANDO BOTAFILLET
 ;; Fillet automatico entre cabeceira e linha, convertido em segmentos
 ;; ============================================================
 
-(defun c:BOTAF (/ *error* oldLuprec selCab selLinha entCab entLinha pPickCab pPickLinha
+(defun c:BOTAFILLET (/ *error* oldLuprec selCab selLinha entCab entLinha pPickCab pPickLinha
                   pSide pCabSel pLinhaSel cfg filletR filletDistSeg entFillet
                   entSegmentado lastBefore lastAfter entCab2 entCabFillet pCabFillet breakOk
                   pBreak cabParts guideParts entCabOther entGuideFillet entGuideOther
@@ -6047,6 +6740,7 @@
                   guidePts cabPts mergedPts angleInternal autoAngle autoAngleDeg
                   autoRange manualMode modeError)
 
+  (_bota_session_pull)
   (vl-load-com)
 
   (defun bf_restore ()
@@ -7489,7 +8183,7 @@
   (setq oldLuprec (getvar "LUPREC"))
   (setvar "LUPREC" 3)
 
-  (prompt "\nBOTAF - Fillet automatico entre cabeceira e linha, convertido em segmentos.")
+  (prompt "\nBOTAFILLET - Concordancia automatica entre cabeceira e linha, convertida em segmentos.")
 
   (setq selCab (entsel "\nSelecione a cabeceira perto da zona desejada: "))
 
@@ -7598,6 +8292,7 @@
                           (if (> filletDistSeg 0.0)
                             (setq *BOTAF_FILLET_SEG* filletDistSeg)
                           )
+                          (_bota_session_publish)
                           (prompt
                             (strcat
                               "\nModo manual: raio R="
@@ -7837,10 +8532,33 @@
 
 (princ "\n---------------------------------------------")
 (princ "\nFerramentas BOTA v5.0 carregadas corretamente.")
-(princ "\nComandos: BOTA | BOTA2 | BOTA3 | BOTAF | BOTAC | BOTAH")
+
+(defun c:B2 ()
+  (c:BOTA2)
+  (princ)
+)
+
+(defun c:B3 ()
+  (c:BOTA3)
+  (princ)
+)
+
+(defun c:BOTAF ()
+  (c:BOTAFILLET)
+  (princ)
+)
+
+(defun c:BF ()
+  (c:BOTAFILLET)
+  (princ)
+)
+
+(_bota_session_start)
+
+(princ "\nComandos: BOTA | BOTA2 (B2) | BOTAM | BOTA3 (B3) | BOTAFILLET (BOTAF/BF) | BOTAC | BOTAH")
 (princ "\n---------------------------------------------")
 
 ;; Abre a janela de ajuda automaticamente ao carregar
-(_bota_show_help)
+(if (not *BOTAHELP_SUPPRESS_STARTUP_HELP*) (_bota_show_help))
 
 (princ)

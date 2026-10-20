@@ -12,3 +12,9 @@
 .DS_Store
 Thumbs.db
 *~
+
+# .NET build intermediates and extracted DLL runtime
+**/bin/
+**/obj/
+BotaHelp.Runtime-*.lsp
+*.dll.*.tmp

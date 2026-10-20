@@ -1,153 +1,7 @@
 // Source-level regressions with simulated CAD calls, not a Civil 3D emulator.
-const fs = require('node:fs');
-const path = require('node:path');
 const assert = require('node:assert/strict');
 const test = require('node:test');
-
-const source = fs.readFileSync(path.join(__dirname, '../bota_help_v5_pt.lsp'), 'utf8');
-function parse(text) {
-  const tokens = text.match(/;[^\r\n]*|"(?:\\.|[^"\\])*"|'|[()]|[^\s()'";]+/g)
-    .filter(token => !token.startsWith(';'));
-  let i = 0;
-  function read() {
-    const token = tokens[i++];
-    if (token === '(') {
-      const list = [];
-      while (tokens[i] !== ')') {
-        if (i >= tokens.length) throw Error('Unclosed list');
-        list.push(read());
-      }
-      i++;
-      return list;
-    }
-    if (token === ')' || token === undefined) throw Error('Unexpected closing token');
-    if (token === "'") return ['quote', read()];
-    if (token.startsWith('"')) return { str: token.slice(1, -1).replace(/\\(.)/g, '$1') };
-    if (/^[+-]?(?:\d+\.?\d*|\.\d+)(?:e[+-]?\d+)?$/i.test(token)) return Number(token);
-    return token.toLowerCase();
-  }
-  const forms = [];
-  while (i < tokens.length) forms.push(read());
-  return forms;
-}
-const forms = parse(source);
-const definitions = new Map();
-function walk(form, callback) {
-  if (!Array.isArray(form)) return;
-  callback(form);
-  for (const child of form) walk(child, callback);
-}
-for (const form of forms) walk(form, node => {
-  if (node[0] === 'defun') definitions.set(node[1], node);
-});
-const truth = value => value !== null && value !== false && value !== undefined &&
-  !(Array.isArray(value) && value.length === 0);
-const nil = value => truth(value) ? value : null;
-
-function runtime(overrides = {}, globals = {}) {
-  const scopes = [new Map(Object.entries(globals))];
-  const calls = [];
-  function get(name) {
-    for (const scope of scopes) if (scope.has(name)) return scope.get(name);
-    if (name === 't') return true;
-    if (name === 'pi') return Math.PI;
-    return null;
-  }
-  function set(name, value) {
-    const scope = scopes.find(scope => scope.has(name)) || scopes[scopes.length - 1];
-    scope.set(name, value);
-    return value;
-  }
-  function sequence(body) {
-    let result = null;
-    for (const node of body) result = evaluate(node);
-    return result;
-  }
-  const builtins = {
-    list: (...items) => nil(items),
-    cons: (a, b) => [a, ...(b || [])],
-    car: a => a?.[0] ?? null,
-    cdr: a => nil(a?.slice(1)),
-    cadr: a => a?.[1] ?? null,
-    caddr: a => a?.[2] ?? null,
-    cadddr: a => a?.[3] ?? null,
-    nth: (i, a) => a?.[i] ?? null,
-    append: (...items) => nil(items.flatMap(item => item || [])),
-    reverse: a => nil([...(a || [])].reverse()),
-    length: a => (a || []).length,
-    member: (a, list) => list?.includes(a) ? list.slice(list.indexOf(a)) : null,
-    not: a => !truth(a),
-    '=': (a, b) => a === b,
-    '/=': (a, b) => a !== b,
-    equal: (a, b, tolerance = 0) => Array.isArray(a) && Array.isArray(b)
-      ? a.length === b.length && a.every((v, i) => Math.abs(v - b[i]) <= tolerance)
-      : typeof a === 'number' ? Math.abs(a - b) <= tolerance : a === b,
-    '+': (...a) => a.reduce((x, y) => x + y, 0),
-    '-': (a, ...b) => b.length ? b.reduce((x, y) => x - y, a) : -a,
-    '*': (...a) => a.reduce((x, y) => x * y, 1),
-    '/': (a, b) => a / b,
-    '1+': a => a + 1,
-    '1-': a => a - 1,
-    '<': (a, b) => a < b,
-    '<=': (a, b) => a <= b,
-    '>': (a, b) => a > b,
-    '>=': (a, b) => a >= b,
-    abs: Math.abs,
-    sqrt: Math.sqrt,
-    min: Math.min,
-    max: Math.max,
-    distance: (a, b) => Math.hypot(...a.map((value, i) => value - b[i])),
-    strcat: (...parts) => parts.join(''),
-    rtos: value => String(value),
-    prompt: () => null,
-    princ: () => null,
-    'vl-catch-all-error-p': value => value instanceof Error,
-    'vl-catch-all-apply': (fn, args) => {
-      try { return invoke(fn, args || []); } catch (error) { return error; }
-    },
-    ...overrides,
-  };
-  function invoke(name, args = []) {
-    calls.push([name, args]);
-    if (builtins[name]) return builtins[name](...args);
-    const def = definitions.get(name);
-    if (!def) throw Error(`Unmocked function: ${name}`);
-    const slash = def[2].indexOf('/');
-    const params = slash < 0 ? def[2] : def[2].slice(0, slash);
-    assert.equal(args.length, params.length, `${name}: argument count`);
-    const frame = new Map(def[2].filter(name => name !== '/').map(name => [name, null]));
-    params.forEach((name, i) => frame.set(name, args[i]));
-    scopes.unshift(frame);
-    try { return sequence(def.slice(3)); } finally { scopes.shift(); }
-  }
-  function evaluate(node) {
-    if (typeof node === 'number') return node;
-    if (typeof node === 'string') return get(node);
-    if (node && !Array.isArray(node)) return node.str;
-    if (!node?.length) return null;
-    const [op, ...args] = node;
-    if (op === 'quote') return args[0];
-    if (op === 'progn') return sequence(args);
-    if (op === 'if') return evaluate(truth(evaluate(args[0])) ? args[1] : args[2]);
-    if (op === 'setq') {
-      let result;
-      for (let i = 0; i < args.length; i += 2) result = set(args[i], evaluate(args[i + 1]));
-      return result;
-    }
-    if (op === 'and') return args.every(arg => truth(evaluate(arg)));
-    if (op === 'or') return args.some(arg => truth(evaluate(arg)));
-    if (op === 'foreach') {
-      let result = null;
-      for (const value of evaluate(args[1]) || []) {
-        set(args[0], value);
-        result = sequence(args.slice(2));
-      }
-      return result;
-    }
-    return invoke(op, args.map(evaluate));
-  }
-  return { invoke, get, set, calls };
-}
+const { forms, definitions, walk, runtime, truth } = require('./lisp-runtime.cjs');
 
 test('BOTA2 helpers, command and debug have valid structure and call arities', () => {
   for (const name of ['_bota2_define_helpers', 'c:bota2', 'c:bota2debug']) {
@@ -286,6 +140,23 @@ test('command and debug call the same preparation helper; centre uses the guide 
   assert.ok(!definitions.has('_bota2d_offset_all'));
 });
 
+test('BOTA2 and BOTA2DEBUG use the common tangency solver', () => {
+  for (const name of ['b2_run_simple', 'c:bota2debug']) {
+    let count = 0;
+    walk(definitions.get(name), node => { if (node[0] === 'b2_tangent_solution') count++; });
+    assert.equal(count, 1, name);
+  }
+});
+
+test('short command aliases delegate to their canonical commands', () => {
+  for (const [alias, target] of [['c:b2', 'c:bota2'], ['c:botaf', 'c:botafillet'], ['c:bf', 'c:botafillet']]) {
+    let calls = 0;
+    const rt = runtime({ [target]: () => { calls++; return null; } });
+    rt.invoke(alias);
+    assert.equal(calls, 1, alias);
+  }
+});
+
 test('failed split, creation, join or commit preserves the original and removes staged objects', () => {
   for (const failure of ['split', 'giro', 'join', 'outer', 'erase', null]) {
     const live = new Set(['original']);
@@ -356,19 +227,29 @@ test('native BREAK accepts either entity order and rejects incomplete results', 
   }
 });
 
-test('guide is shortened to 1.5 implement lengths before OFFSET, in both orientations', () => {
-  for (const jointDist of [0, 120]) {
+test('guide keeps a 0.2 implement reserve opposite the pick before OFFSET', () => {
+  for (const jointDist of [0, 60, 120]) {
     const cuts = [];
     const rt = runtime({
       b2_copy_entity: () => 'copy',
       b2_break_copy_keep_toward: (e, point, ref) => { cuts.push([point, ref]); return e; },
       b2_curve_total_length: () => 120,
-      b2_curve_dist_at_point: () => jointDist,
+      b2_curve_dist_at_point: (_, point) => point === 'joint'
+        ? jointDist : (jointDist === 120 ? 0 : 120),
       'vlax-curve-getpointatdist': (_, dist) => [dist, 0, 0],
     });
-    const length = 36.578 * 1.5;
-    assert.equal(rt.invoke('b2_guide_temp_segment', ['guide', 'joint', 'pick', length]), 'copy');
-    assert.deepEqual(cuts, [['joint', 'pick'], [[jointDist === 0 ? length : 120 - length, 0, 0], 'joint']]);
+    const forward = 36.578 * 1.5;
+    const reserve = 36.578 * 0.2;
+    assert.equal(rt.invoke('b2_guide_temp_segment', ['guide', 'joint', 'pick', forward, reserve]), 'copy');
+    const expected = jointDist === 0
+      ? [[[forward, 0, 0], 'joint']]
+      : jointDist === 120
+        ? [[[120 - forward, 0, 0], 'joint']]
+        : [
+          [[jointDist - reserve, 0, 0], 'joint'],
+          [[jointDist + forward, 0, 0], 'joint'],
+        ];
+    assert.deepEqual(cuts, expected);
   }
 });
 
@@ -385,7 +266,7 @@ test('header local window keeps both sides and measures cuts on the original cur
   assert.deepEqual(cuts, [['copy', [70, 0, 0], 'joint'], ['copy', [130, 0, 0], 'joint']]);
 });
 
-test('shared solver retries the same header side locally and exposes a nonintersecting pair to debug', () => {
+test('offset pair uses the supplied local header and exposes a nonintersecting pair to debug', () => {
   const candidates = [];
   const removed = [];
   const rt = runtime({
@@ -393,17 +274,16 @@ test('shared solver retries the same header side locally and exposes a noninters
       candidates.push(e);
       return [[`${e}-offset`, 1]];
     },
-    b2_offset_side_score: e => e === 'short-header' ? 10 : -10,
+    b2_offset_side_score: e => e === 'local-header' ? 10 : -10,
     b2_dist_to_ent: () => 1,
-    b2_header_temp_segment: () => 'short-header',
     b2_find_offset_intersection: () => null,
     b2_delete_ent: e => removed.push(e),
     entget: e => e,
   });
-  const result = rt.invoke('b2_offset_pair_for_maneuver', ['full-header', 'guide', 10, 11, 'cab-pick', 'guide-pick', 'joint', 30]);
-  assert.deepEqual(candidates, ['full-header', 'short-header', 'guide']);
-  assert.deepEqual(result, ['short-header-offset', 'guide-offset', null, null, 'short-header']);
-  assert.deepEqual(removed, ['full-header-offset']);
+  const result = rt.invoke('b2_offset_pair_for_maneuver', ['local-header', 'guide', 10, 11, 'cab-pick', 'guide-pick', 'joint']);
+  assert.deepEqual(candidates, ['local-header', 'guide']);
+  assert.deepEqual(result, ['local-header-offset', 'guide-offset', null, null]);
+  assert.deepEqual(removed, []);
   assert.match(rt.get('offseterror'), /1.000 m/);
 });
 
@@ -427,52 +307,45 @@ test('disabled connection and circle cutting remain disabled during commit', () 
   assert.equal(rt.get('*bota_conectar_cab*'), null);
 });
 
-test('centre failure retries a local header with the same reference, then commits only valid tangency', () => {
+test('centre uses the prepared local header and commits only valid tangency', () => {
   for (const succeeds of [true, false]) {
     const offsetCalls = [];
-    const headerCuts = [];
     let committed = false;
     const rt = runtime({
       b2_clear_temporaries: () => null,
-      b2_prepare_offsets: () => ['cab-offset', 'guide-offset', [20, 18, 0], null, null, [0, 0, 0]],
+      b2_prepare_offsets: () => ['cab-offset', 'guide-offset', [20, 18, 0], null, 'local-header', [0, 0, 0]],
       b2_delete_ent: () => null,
       b2_offset_select_toward: (e, radius, ref) => {
         offsetCalls.push([e, radius, ref]);
-        return e === 'short-header' && succeeds ? 'centre-offset' : null;
-      },
-      b2_header_temp_segment: (e, joint, length) => {
-        headerCuts.push([e, joint, length]);
-        return 'short-header';
+        return e === 'local-header' && succeeds ? 'centre-offset' : null;
       },
       b2_circle_entity: () => 'circle',
-      b2_intersection_best: () => [5, 10, 0],
-      b2_closest_point: () => [5, 0, 0],
+      b2_tangent_solution: () => succeeds ? [[5, 10, 0], [5, 0, 0]] : null,
       b2_nseg_inscribed: () => 70,
       b2_commit_maneuver: () => { committed = true; return true; },
     }, { ent: 'header', rgiro: 10 });
     rt.set('tamimpl', 36.578);
     rt.set('pguiapick', [0, 20, 0]);
     rt.invoke('b2_run_simple');
-    assert.deepEqual(offsetCalls, [['header', 10, [0, 20, 0]], ['short-header', 10, [0, 20, 0]]]);
-    assert.deepEqual(headerCuts, [['header', [0, 0, 0], 2 * 36.578]]);
+    assert.deepEqual(offsetCalls, [['local-header', 10, [0, 20, 0]]]);
     assert.equal(committed, succeeds);
   }
 });
 
-test('header retry uses 2 implement lengths per side only after the full offset fails', () => {
-  for (const impl of [10, 30, 36.578]) for (const fullWorks of [true, false]) {
+test('header is limited to two implement lengths per side before every offset', () => {
+  for (const impl of [10, 30, 36.578]) {
     const events = [];
     const headerCuts = [];
     const rt = runtime({
       b2_reference_intersection: () => 'joint',
-      b2_guide_temp_segment: (e, joint, pick, length) => {
-        assert.deepEqual([e, joint, pick, length], ['guide', 'joint', 'guide-pick', 1.5 * impl]);
+      b2_guide_temp_segment: (e, joint, pick, length, reserve) => {
+        assert.deepEqual([e, joint, pick, length, reserve], ['guide', 'joint', 'guide-pick', 1.5 * impl, 0.2 * impl]);
         events.push('prepare-guide');
         return 'short-guide';
       },
       b2_offset_candidates_signed: e => {
         events.push(`offset-${e}`);
-        return e === 'header' && !fullWorks ? null : [[`${e}-offset`, 1]];
+        return [[`${e}-offset`, 1]];
       },
       b2_header_temp_segment: (e, joint, length) => {
         headerCuts.push([e, joint, length]);
@@ -487,11 +360,11 @@ test('header retry uses 2 implement lengths per side only after the full offset 
       b2_delete_ent: () => null,
     });
     const result = rt.invoke('b2_prepare_offsets', ['header', 'guide', 'cab-pick', 'guide-pick', impl, 0.2]);
-    assert.deepEqual(headerCuts, fullWorks ? [] : [['header', 'joint', 2 * impl]]);
-    assert.deepEqual(events, fullWorks
-      ? ['prepare-guide', 'offset-header', 'offset-short-guide']
-      : ['prepare-guide', 'offset-header', 'cut-header-copy', 'offset-short-header', 'offset-short-guide']);
+    assert.deepEqual(headerCuts, [['header', 'joint', 2 * impl]]);
+    assert.deepEqual(events,
+      ['prepare-guide', 'cut-header-copy', 'offset-short-header', 'offset-short-guide']);
     assert.deepEqual(result.slice(2, 4), [[1, 2, 0], null]);
+    assert.equal(result[4], 'short-header');
     assert.equal(rt.get('offseterror'), null);
   }
 });
@@ -506,4 +379,64 @@ test('debug cleanup retains selected offsets but deletes the calculation copies'
   });
   rt.invoke('b2_clear_temporaries');
   assert.deepEqual([...live], ['header-offset', 'guide-offset']);
+});
+
+test('BOTA2 deletes selected offset copies when they do not intersect', () => {
+  const live = new Set(['header-offset', 'guide-offset']);
+  const rt = runtime({
+    entget: e => live.has(e) ? e : null,
+    b2_prepare_offsets: () => ['header-offset', 'guide-offset', null, null, null, 'joint'],
+    b2_delete_ent: e => live.delete(e),
+  }, { ent: 'header', guia: 'guide', rgiro: 10, tamimpl: 36.578 });
+  rt.invoke('b2_run_simple');
+  assert.deepEqual([...live], []);
+});
+
+test('tangency solver keeps the candidate nearest the offset reference', () => {
+  const points = [
+    [0, 10.03, 0],
+    [10.02, 0, 0],
+    [0, 10.06, 0],
+  ];
+  const rt = runtime({
+    b2_real_intersections: () => points,
+    b2_closest_point: (_, point) => point[0] === 0 ? [0, 0, 0] : [0, 0, 0],
+  });
+  assert.deepEqual(
+    rt.invoke('b2_tangent_solution', ['header', 'offset', 'outer-circle', [28, 0, 0], 10, 18, [10, 0, 0]]),
+    [[10, 0, 0], [0, 0, 0], [10.02, 0, 0], 0.019999999999999574, 0],
+  );
+  assert.equal(rt.get('tangenterror'), null);
+});
+
+test('tangency solver accepts corrections through 0.05 m and rejects larger values', () => {
+  for (const correction of [0.03, 0.05, 0.051]) {
+    const rt = runtime({
+      b2_real_intersections: () => [[0, 10 + correction, 0]],
+      b2_closest_point: () => [0, 0, 0],
+    });
+    const result = rt.invoke(
+      'b2_tangent_solution', ['header', 'offset', 'outer-circle', [0, 28, 0], 10, 18, [0, 10, 0]],
+    );
+    assert.equal(Boolean(result), correction <= 0.05, `correction ${correction}`);
+    if (result) {
+      assert.deepEqual(result.slice(0, 2), [[0, 10, 0], [0, 0, 0]]);
+      assert.ok(result[3] <= 0.050000001);
+      assert.ok(result[4] <= 0.050000001);
+    } else {
+      assert.match(rt.get('tangenterror'), /0.050 m/);
+    }
+  }
+});
+
+test('tangency solver rejects a corrected centre when its external radius exceeds 0.05 m', () => {
+  const rt = runtime({
+    b2_real_intersections: () => [[0, 10.02, 0]],
+    b2_closest_point: () => [0, 0, 0],
+  });
+  assert.equal(
+    rt.invoke('b2_tangent_solution', ['header', 'offset', 'outer-circle', [0, 28.051, 0], 10, 18, [0, 10, 0]]),
+    null,
+  );
+  assert.match(rt.get('tangenterror'), /0.050 m/);
 });

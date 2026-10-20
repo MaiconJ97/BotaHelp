@@ -1,0 +1,25 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <PlatformTarget>x64</PlatformTarget>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <AssemblyName>BotaHelp</AssemblyName>
+    <RootNamespace>BotaHelp</RootNamespace>
+    <Version>1.0.22</Version>
+    <AutoCADDir Condition="'$(AutoCADDir)' == ''">C:\Program Files\Autodesk\AutoCAD 2026</AutoCADDir>
+    <EnableNETAnalyzers>true</EnableNETAnalyzers>
+  </PropertyGroup>
+  <ItemGroup>
+    <!-- AutoCAD supplies these assemblies and resolves its own dependency graph. -->
+    <Reference Include="AcCoreMgd"><HintPath>$(AutoCADDir)\accoremgd.dll</HintPath><Private>false</Private><ExternallyResolved>true</ExternallyResolved></Reference>
+    <Reference Include="AcDbMgd"><HintPath>$(AutoCADDir)\acdbmgd.dll</HintPath><Private>false</Private><ExternallyResolved>true</ExternallyResolved></Reference>
+    <Reference Include="AcMgd"><HintPath>$(AutoCADDir)\acmgd.dll</HintPath><Private>false</Private><ExternallyResolved>true</ExternallyResolved></Reference>
+    <Reference Include="AdWindows"><HintPath>$(AutoCADDir)\AdWindows.dll</HintPath><Private>false</Private><ExternallyResolved>true</ExternallyResolved></Reference>
+    <EmbeddedResource Include="..\bota_help_v5_pt.lsp" LogicalName="BotaHelp.Runtime.lsp" />
+  </ItemGroup>
+  <Target Name="CheckAutoCADReferences" BeforeTargets="ResolveReferences">
+    <Error Condition="!Exists('$(AutoCADDir)\acmgd.dll')" Text="No se encontro AutoCAD. Indique -p:AutoCADDir=&quot;ruta de AutoCAD 2026&quot;." />
+  </Target>
+</Project>
