@@ -7,6 +7,11 @@
 *.dwl
 *.dwl2
 *.sv$
+*.log
+/backups/
+
+# Duplicate DLLs copied locally; distribution versions live in dist/
+/BotaHelp-*.dll
 
 # Operating system and editor files
 .DS_Store
