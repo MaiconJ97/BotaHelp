@@ -49,7 +49,7 @@ test('new drawings and reloading cannot replace the shared configuration; sessio
   assert.equal(c.get('*bota_recto_k*'), 0);
   const otherSession = drawing(new Map());
   assert.equal(otherSession.get('*bota_impl*'), 36.578);
-  assert.equal(otherSession.get('*bota_recto_k*'), 1);
+  assert.equal(otherSession.get('*bota_recto_k*'), 0.75);
   assert.equal(a.get('*bota_impl*'), 42);
 });
 
@@ -178,7 +178,7 @@ test('BOTAFILLET manual adjustments are shared before native geometry operations
 });
 
 test('BOTA3 synchronizes zero straight factor and invalid radii do not overwrite the session', () => {
-  for (const [mode, inputs, expectedFactor] of [['L', [], 0], ['R', [-1, 0], 1]]) {
+  for (const [mode, inputs, expectedFactor] of [['L', [], 0], ['R', [-1, 0], 0.75]]) {
     const bb = new Map();
     const a = commandDrawing(bb, {
       getkword: () => mode, getreal: () => 0, getdist: () => inputs.shift(),

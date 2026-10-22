@@ -18,7 +18,7 @@
 (if (not *BOTA_FILLET_R*)   (setq *BOTA_FILLET_R* 30.000))
 (if (not *BOTA_FILLET_SEG*) (setq *BOTA_FILLET_SEG* 1.500))
 (if (not *BOTA_TRANS_L*)    (setq *BOTA_TRANS_L* 5.000))
-(if (not *BOTA_RECTO_K*)    (setq *BOTA_RECTO_K* 1.000))
+(if (not *BOTA_RECTO_K*)    (setq *BOTA_RECTO_K* 0.750))
 (defun _bota3_init_densification ()
   ;; A marca preserva nil (desativado), inclusive ao recarregar o LSP.
   (if (not *BOTA3_DENSIFY_CONFIGURADO*)
@@ -578,7 +578,7 @@
   ;; Um unico snapshot validado, comum aos desenhos desta instancia do AutoCAD.
   ;; Nao publica entidades, resultados derivados ou estado temporario de comandos.
   (setq values (_bota_cfg_current_values)
-        factor (if (numberp *BOTA_RECTO_K*) *BOTA_RECTO_K* 1.0))
+        factor (if (numberp *BOTA_RECTO_K*) *BOTA_RECTO_K* 0.75))
   (if (and (_bota_cfg_values_valid_p values) (>= factor 0.0))
     (progn
       (vl-bb-set 'BOTAHELP_SETTINGS_V1 (list values factor))
@@ -6063,7 +6063,7 @@
                             / k lMax f res)
     ;; Reta automatica: k * radio de giro, reduciendo hasta que exista solucion.
     ;; Prueba 100%, 75%, 50%, 25% y 0% de la longitud objetivo.
-    (setq k    (if *BOTA_RECTO_K* *BOTA_RECTO_K* 1.0)
+    (setq k    (if *BOTA_RECTO_K* *BOTA_RECTO_K* 0.75)
           lMax (* k cr)
           f    1.0
           res  nil)
@@ -6177,7 +6177,7 @@
 
 
   ;; Factor de la reta automatica entre giro y fillet (x radio de giro)
-  (if (not *BOTA_RECTO_K*)      (setq *BOTA_RECTO_K* 1.0))
+  (if (not *BOTA_RECTO_K*)      (setq *BOTA_RECTO_K* 0.75))
 
   (setq oldLuprec (getvar "LUPREC"))
   (setvar "LUPREC" 3)

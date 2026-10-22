@@ -7,7 +7,7 @@ concordancias segmentadas. La fuente activa es
 ## Instalacion
 
 Para usar una pestaña Ribbon conservando AutoLISP, cargue
-[`dist/BotaHelp-1.0.22.dll`](dist/BotaHelp-1.0.22.dll) con `NETLOAD` en Civil 3D/AutoCAD 2026
+[`dist/BotaHelp-1.0.23.dll`](dist/BotaHelp-1.0.23.dll) con `NETLOAD` en Civil 3D/AutoCAD 2026
 (x64, .NET 8). La pestaña **BotaHelp** incluye los comandos, configuración y
 ayuda. Si el Ribbon está oculto, escriba `BOTAHELP`. Consulte las
 [instrucciones de la DLL](ribbon/README.md) para distribución y compilación.
@@ -99,6 +99,12 @@ unen el tramo resultante a la cabecera cuando la geometria lo permite. En
 segmentos que normalmente se eliminan: el circulo queda completo pero sigue
 abierto con ambos extremos en la tangencia, por lo que el flujo de BREAK y
 JOIN se mantiene.
+
+En `BOTA3`, la opcion `L` ajusta la longitud objetivo de la recta entre
+el giro y el fillet como factor del radio de giro. El valor inicial es
+`0.75`: con radio de 10 m, el objetivo es 7.5 m. Si no cabe, el solver
+puede usar una recta menor. Se conservan los valores ya elegidos en la
+sesion; para probar este ajuste en una sesion abierta, ingrese `L` y `0.75`.
 
 ## Densificacion opcional de BOTA3
 

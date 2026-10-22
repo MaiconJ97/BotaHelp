@@ -10,9 +10,14 @@ dibujos de la misma instancia, incluidos los abiertos despues. Cada comando
 y la ventana de configuracion recuperan los ultimos valores confirmados.
 La sincronizacion es en memoria y termina al cerrar AutoCAD/Civil 3D.
 
+La version 1.0.23 cambia el factor inicial de recta de BOTA3 a `0.75`.
+Con radio de giro de 10 m, la longitud objetivo es 7.5 m. Se conservan
+los factores ya elegidos; en una sesion abierta puede ajustar `BOTA3` >
+`L` > `0.75` para probarlo sin cambiar las demas preferencias.
+
 ## Cargar la DLL
 
-1. Copie `dist/BotaHelp-1.0.22.dll` a una carpeta permanente donde tenga permiso de
+1. Copie `dist/BotaHelp-1.0.23.dll` a una carpeta permanente donde tenga permiso de
    escritura, por ejemplo una carpeta BotaHelp dentro de Documentos.
 2. En Civil 3D, ejecute `NETLOAD` y seleccione esa DLL.
 3. Abra la pestaña **BotaHelp**. Si el Ribbon está oculto, escriba `BOTAHELP`.
@@ -48,7 +53,7 @@ muestra el retorno amarillo con su guía naranja. Los iconos son vectoriales y
 su [vista previa](../dist/BotaHelp-icons-1.0.2.png) incluye el tamaño real de 32 px.
 También conserva el Enter explícito de la versión 1.0.1 al pulsar un botón.
 La versión 1.0.3 muestra el botón de concordancia como **Fillet Automatico**.
-Reinicie Civil 3D y cargue `dist/BotaHelp-1.0.22.dll` con `NETLOAD` para actualizar.
+Reinicie Civil 3D y cargue `dist/BotaHelp-1.0.23.dll` con `NETLOAD` para actualizar.
 La confirmación de parámetros después de seleccionar las entidades se mantiene.
 
 La versión 1.0.4 inicia los comandos del Ribbon por su nombre, igual que al
@@ -166,7 +171,7 @@ indicar explícitamente las rutas:
 .\ribbon\build.ps1 -DotNet 'C:\ruta\dotnet.exe' -AutoCADDir 'C:\Program Files\Autodesk\AutoCAD 2026'
 ```
 
-Use `-OutputName BotaHelp-1.0.22.dll` para generar un archivo con otro nombre
+Use `-OutputName BotaHelp-1.0.23.dll` para generar un archivo con otro nombre
 cuando una versión anterior esté cargada y bloqueada por AutoCAD.
 
 Se ejecutan la compilación, las comprobaciones del recurso incorporado y de su
