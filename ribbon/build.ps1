@@ -19,7 +19,7 @@ if ($LASTEXITCODE -ne 0) { throw 'Fallo la compilacion de BotaHelp.dll.' }
 $compiledDll = Join-Path $PSScriptRoot 'bin\Release\net8.0-windows\BotaHelp.dll'
 if (-not $SkipChecks) {
     $testCases = Join-Path $env:TEMP ('botahelp-invocations-' + [guid]::NewGuid().ToString('N') + '.json')
-    & $DotNet run --project (Join-Path $projectRoot 'tests\ribbon\BotaHelp.Ribbon.Tests.csproj') -c Release -- $compiledDll (Join-Path $projectRoot 'bota_help_v5_pt.lsp') $testCases
+    & $DotNet run --project (Join-Path $projectRoot 'tests\ribbon\BotaHelp.Ribbon.Tests.csproj') -c Release -- $compiledDll (Join-Path $projectRoot 'bota_help.lsp') $testCases
     if ($LASTEXITCODE -ne 0) { throw 'Fallaron las comprobaciones de empaquetado.' }
     $previousCases = $env:BOTAHELP_INVOCATION_CASES
     try {

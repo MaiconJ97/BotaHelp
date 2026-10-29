@@ -8,15 +8,15 @@ principales expuestos son `BOTA`, `BOTA2` y `BOTA3`.
 
 ## Estructura relevante
 
-- `bota_help_v5_pt.lsp` es la implementacion mas completa disponible e incluye
-  los comandos `BOTA`, `BOTA2`, `BOTA3` y `BOTAF`.
-- `bota_help_v4.lsp` y `bota_help_v4_pt.lsp` son versiones anteriores que se
-  conservan como referencia.
-- `BOTA_corte_join_cabecera.lsp`, `BOTA2_join_tramo_contrario_pside.lsp` y
-  `BOTA3_solver_max_externo_break_guia.lsp` son implementaciones independientes
-  de los comandos homonimos.
-- Los archivos `.FAS` y `.VLX` son artefactos compilados. No los modifiques ni
-  los reemplaces salvo que se solicite expresamente.
+- `bota_help.lsp` es la fuente principal e incluye `BOTA`, `BOTA2` (`B2`),
+  `BOTAM`, `BOTA3` (`B3`), `BOTAFILLET` (`BOTAF`, `BF`), `BOTAC` y `BOTAH`.
+- `ribbon/` contiene el complemento .NET y su script de compilacion. La DLL
+  incorpora la fuente principal como recurso.
+- `tests/` contiene las pruebas automatizadas y los casos para Civil 3D.
+- `tools/ribbon-preview/` permite generar vistas previas de los iconos.
+- `dist/`, `.fas`, `.vlx` y `.prv` son artefactos locales ignorados por Git.
+  No se editan como sustituto de las fuentes. Las versiones anteriores se
+  consultan en el historial de Git.
 
 ## Convenciones de implementacion
 
@@ -57,6 +57,11 @@ principales expuestos son `BOTA`, `BOTA2` y `BOTA3`.
 7. Tras tocar estructuras de control, comprobar el balance de parentesis y que
    `T` no se haya convertido accidentalmente en una llamada de funcion.
 
-No existe una suite automatizada de pruebas ni se detecto un repositorio Git en
-esta carpeta. La validacion funcional manual en Civil 3D es el control
-principal antes de entregar cambios.
+El proyecto utiliza Git y dispone de pruebas automatizadas. Desde la raiz,
+ejecute `.\ribbon\build.ps1` para compilar y comprobar el empaquetado, la
+extraccion de la fuente y las pruebas locales de AutoLISP y del cargador.
+Requiere un SDK .NET 8, Node.js y las bibliotecas instaladas de AutoCAD 2026.
+La salida se genera en `dist/BotaHelp.dll` y no se versiona.
+
+Estas comprobaciones no abren Civil 3D. La validacion funcional manual en la
+aplicacion sigue siendo necesaria al cambiar geometria, dialogos o el Ribbon.

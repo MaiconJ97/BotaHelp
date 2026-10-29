@@ -5,7 +5,7 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 if (-not (Test-Path -LiteralPath $Template)) { throw "Template not found: $Template" }
-$taskSource = (Join-Path (Split-Path -Parent $PSScriptRoot) 'bota_help_v5_pt.lsp').Replace('\', '/')
+$taskSource = (Join-Path (Split-Path -Parent $PSScriptRoot) 'bota_help.lsp').Replace('\', '/')
 $taskResults = Join-Path $env:TEMP ('botahelp-sync-native-' + [guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Path $taskResults | Out-Null
 $taskAcad = $null

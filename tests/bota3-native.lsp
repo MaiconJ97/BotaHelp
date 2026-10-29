@@ -1,4 +1,4 @@
-;; Load bota_help_v5_pt.lsp first. Run (b3t_run) in an EMPTY disposable drawing.
+;; Load bota_help.lsp first. Run (b3t_run) in an EMPTY disposable drawing.
 ;; Uses desktop AutoCAD/Civil 3D ActiveX and real FILLET/BREAK/JOIN commands.
 (defun b3t_check (label value)
   (write-line (strcat (if value "PASS: " "FAIL: ") label) b3tLog)

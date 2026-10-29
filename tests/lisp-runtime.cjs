@@ -3,7 +3,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const assert = require('node:assert/strict');
 
-const source = fs.readFileSync(path.join(__dirname, '../bota_help_v5_pt.lsp'), 'utf8');
+const source = fs.readFileSync(path.join(__dirname, '../bota_help.lsp'), 'utf8');
 function parse(text) {
   const tokens = text.match(/;[^\r\n]*|"(?:\\.|[^"\\])*"|'|[()]|[^\s()'";]+/g)
     .filter(token => !token.startsWith(';'));

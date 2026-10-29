@@ -17,7 +17,7 @@
     <Reference Include="AcDbMgd"><HintPath>$(AutoCADDir)\acdbmgd.dll</HintPath><Private>false</Private><ExternallyResolved>true</ExternallyResolved></Reference>
     <Reference Include="AcMgd"><HintPath>$(AutoCADDir)\acmgd.dll</HintPath><Private>false</Private><ExternallyResolved>true</ExternallyResolved></Reference>
     <Reference Include="AdWindows"><HintPath>$(AutoCADDir)\AdWindows.dll</HintPath><Private>false</Private><ExternallyResolved>true</ExternallyResolved></Reference>
-    <EmbeddedResource Include="..\bota_help_v5_pt.lsp" LogicalName="BotaHelp.Runtime.lsp" />
+    <EmbeddedResource Include="..\bota_help.lsp" LogicalName="BotaHelp.Runtime.lsp" />
   </ItemGroup>
   <Target Name="CheckAutoCADReferences" BeforeTargets="ResolveReferences">
     <Error Condition="!Exists('$(AutoCADDir)\acmgd.dll')" Text="No se encontro AutoCAD. Indique -p:AutoCADDir=&quot;ruta de AutoCAD 2026&quot;." />

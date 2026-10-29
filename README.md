@@ -1,26 +1,39 @@
 # BotaHelp
 
-Rutinas AutoLISP para Autodesk AutoCAD y Civil 3D que generan maniobras BOTA y
-concordancias segmentadas. La fuente activa es
-[`bota_help_v5_pt.lsp`](bota_help_v5_pt.lsp).
+BotaHelp reúne rutinas AutoLISP para generar maniobras BOTA y concordancias
+segmentadas en Autodesk AutoCAD y Civil 3D. El código está en
+[`bota_help.lsp`](bota_help.lsp).
 
-## Instalacion
+## Demostración
 
-Para usar una pestaña Ribbon conservando AutoLISP, cargue
-[`dist/BotaHelp-1.0.23.dll`](dist/BotaHelp-1.0.23.dll) con `NETLOAD` en Civil 3D/AutoCAD 2026
-(x64, .NET 8). La pestaña **BotaHelp** incluye los comandos, configuración y
-ayuda. Si el Ribbon está oculto, escriba `BOTAHELP`. Consulte las
-[instrucciones de la DLL](ribbon/README.md) para distribución y compilación.
+[Ver la demostración de BotaHelp en video](docs/demo/botahelp-demo.mp4).
 
-También puede seguir cargando la fuente independiente:
+## Instalación
+
+Para usar la fuente independiente:
 
 1. En AutoCAD o Civil 3D, ejecute `APPLOAD`.
-2. Cargue `bota_help_v5_pt.lsp`.
+2. Cargue `bota_help.lsp`.
 3. Escriba `BOTAH` para ver la ayuda resumida o `BOTAC` para configurar los
    valores antes de ejecutar una maniobra.
 
-Los comandos trabajan en el plano XY y generan polilineas abiertas. Use copias
-de las entidades originales mientras valida el resultado de cada maniobra.
+Para usar la pestaña Ribbon en Civil 3D/AutoCAD 2026 (x64, .NET 8), compile
+el complemento desde PowerShell en la raíz del repositorio:
+
+```powershell
+.\ribbon\build.ps1
+```
+
+Necesita un SDK .NET 8, Node.js y las bibliotecas instaladas de AutoCAD 2026.
+El script ejecuta las pruebas y genera `dist/BotaHelp.dll`. Cargue esa DLL
+con `NETLOAD` para acceder a los comandos, la configuración y la ayuda desde
+el Ribbon. La DLL incluye la fuente AutoLISP. Si el Ribbon está oculto,
+escriba `BOTAHELP`. Los compilados se generan en su equipo y no se incluyen
+en el repositorio. Las [instrucciones de la DLL](ribbon/README.md) explican
+la compilación y la carga.
+
+Los comandos trabajan en el plano XY y generan polilíneas abiertas. Trabaje
+con copias de las entidades originales mientras comprueba cada maniobra.
 
 ## Comandos
 
@@ -34,9 +47,9 @@ de las entidades originales mientras valida el resultado de cada maniobra.
 | `BOTAC` | Abre la configuracion de parametros. |
 | `BOTAH` | Abre la ayuda resumida dentro de AutoCAD/Civil 3D. |
 
-## Seleccion y lado de maniobra
+## Selección y lado de maniobra
 
-En `BOTA2` y `BOTA3` se realizan dos selecciones:
+Para ejecutar `BOTA2` y `BOTA3`, haga dos selecciones:
 
 1. Haga clic en la cabecera cerca de la zona de trabajo. Este clic define el
    lado donde se genera la maniobra.
@@ -51,32 +64,33 @@ Si la concordancia no cabe allí, se cancela sin conectar con la pasada vecina.
 `BOTA3` no mide ni limita el ángulo entre la cabecera y la guía. La conexión
 se calcula cuando la geometría permite usar los radios configurados.
 
-La elección del lado de los offsets y del sentido inicial del giro usa los
-mismos criterios de `BOTA2`, con los puntos completos de ambos clics. El
-cruce elegido centra la búsqueda de la maniobra, incluso al rotar el dibujo
-o invertir el sentido de creación de las polilíneas.
+Para elegir el lado de los offsets y el sentido inicial del giro, la rutina
+usa los mismos criterios de `BOTA2` y los puntos completos de ambos clics.
+La búsqueda de la maniobra se centra en el cruce elegido, incluso al rotar
+el dibujo o invertir el sentido de creación de las polilíneas.
 
-En `BOTAFILLET`, el clic sobre la cabecera selecciona el tramo que recibira la
-concordancia y el clic sobre la linea selecciona su brazo. Cuando ambas
-entidades se cruzan, la rutina las parte en la interseccion, conserva los
-tramos seleccionados y crea una unica polilinea continua entre ellos.
+En `BOTAFILLET`, el clic sobre la cabecera selecciona el tramo que recibirá
+la concordancia y el clic sobre la línea selecciona su brazo. Si ambas
+entidades se cruzan, la rutina las corta en la intersección, conserva los
+tramos seleccionados y los une en una sola polilínea continua.
 
-## Parametros
+## Parámetros
 
-Configure los valores con `BOTAC`. Los parametros se comparten automaticamente
-entre los dibujos de una misma instancia de Civil 3D/AutoCAD: el ultimo cambio
-valido confirmado se usa al abrir `BOTAC` o ejecutar un comando BOTA en otro
-dibujo. Tambien se aplican a dibujos abiertos posteriormente en esa sesion.
-Incluye todas las opciones de `BOTAC` y el factor de recta de `BOTA3`.
-La primera carga de BotaHelp establece los valores iniciales; recargarlo
-recupera la configuracion compartida. No se modifican maniobras ya dibujadas.
-La sincronizacion termina al cerrar la instancia y no alcanza otras instancias.
+Configure los valores con `BOTAC`. Los dibujos de una misma instancia de
+Civil 3D/AutoCAD comparten el último cambio válido que confirme. Al abrir
+`BOTAC` o ejecutar un comando BOTA en otro dibujo, la rutina recupera esos
+valores, también en los dibujos que abra después durante la sesión.
+Se comparten todas las opciones de `BOTAC` y el factor de recta de `BOTA3`.
+BotaHelp establece los valores iniciales en la primera carga y recupera la
+configuración compartida al recargarlo. Las maniobras ya dibujadas conservan
+su geometría. La sincronización termina al cerrar la instancia y no se
+extiende a otras instancias.
 
-Use los perfiles para conservar o transferir valores entre sesiones. Na mesma janela, **Salvar arquivo**
-exporta todos os parametros para um perfil `.txt` e **Carregar arquivo** restaura
-um perfil previamente salvo. O arquivo e validado antes de alterar a configuracao
-atual e nao executa codigo AutoLISP. Tambien pode modificarlos durante la
-ejecucion de cada comando.
+Use los perfiles para guardar o transferir valores entre sesiones. En la
+misma ventana, **Salvar arquivo** exporta todos los parámetros a un perfil
+`.txt` y **Carregar arquivo** recupera un perfil guardado. La rutina valida
+el archivo antes de cambiar la configuración y no ejecuta código AutoLISP
+al cargarlo. También puede ajustar los valores durante cada comando.
 
 | Parametro | Aplica a | Valor inicial | Descripcion |
 | --- | --- | ---: | --- |
@@ -93,38 +107,37 @@ ejecucion de cada comando.
 | Radio de concordancia | `BOTAFILLET` | 10 m | Radio usado por `BOTAFILLET` en modo configurado. |
 | Distancia Max. Vertices | `BOTAFILLET` | 1.5 m | Separacion maxima de vertices de la concordancia en modo configurado. |
 
-La opcion **Conectar a cabecera** de `BOTAC` controla si las maniobras BOTA
-unen el tramo resultante a la cabecera cuando la geometria lo permite. En
-`BOTA` y `BOTA2`, desactivar **Cortar circulo interno** conserva los dos
-segmentos que normalmente se eliminan: el circulo queda completo pero sigue
-abierto con ambos extremos en la tangencia, por lo que el flujo de BREAK y
-JOIN se mantiene.
+La opción **Conectar a cabecera** de `BOTAC` une el tramo de la maniobra BOTA
+a la cabecera cuando la geometría lo permite. En `BOTA` y `BOTA2`, desactivar
+**Cortar circulo interno** conserva los dos segmentos que normalmente se
+eliminan. El círculo queda completo y abierto, con ambos extremos en la
+tangencia; el flujo de BREAK y JOIN se mantiene.
 
-En `BOTA3`, la opcion `L` ajusta la longitud objetivo de la recta entre
-el giro y el fillet como factor del radio de giro. El valor inicial es
-`0.75`: con radio de 10 m, el objetivo es 7.5 m. Si no cabe, el solver
-puede usar una recta menor. Se conservan los valores ya elegidos en la
-sesion; para probar este ajuste en una sesion abierta, ingrese `L` y `0.75`.
+En `BOTA3`, la opción `L` define la longitud deseada de la recta entre el giro
+y el fillet como factor del radio de giro. El valor inicial es `0.75`: con
+un radio de 10 m, la recta deseada mide 7.5 m. Si no cabe, la rutina puede
+usar una más corta. Los valores elegidos durante la sesión se conservan;
+para probar este ajuste en una sesión abierta, ingrese `L` y `0.75`.
 
-## Densificacion opcional de BOTA3
+## Densificación opcional de BOTA3
 
 En `BOTAC`, use **Ativar densificacao de BOTA3** para activar o desactivar esta
 opcion. **Extensao antes/depois da manobra (m)** define la longitud adicional
 en cada extremo y **Distancia Max. Vertices no percurso (m)** define el limite
 de separacion. Los valores iniciales son 5 m por extremo y 1 m entre vertices.
 
-El limite se aplica a un tramo continuo: cabecera antes de la entrada, giro,
-recta intermedia, fillet y guia despues de la salida. Se conservan los vertices
-que ya esten mas proximos, la forma de los arcos y los anchos de la polilinea.
-Si un extremo tiene menos longitud disponible, se usa solo esa longitud, sin
-prolongarlo. Fuera de este intervalo no se agregan vertices.
+El límite abarca un tramo continuo: la cabecera antes de la entrada, el giro,
+la recta intermedia, el fillet y la guía después de la salida. La rutina
+conserva los vértices que ya estén más próximos, la forma de los arcos y los
+anchos de la polilínea. Si falta longitud en un extremo, usa la disponible
+sin prolongarlo. Fuera de este intervalo no agrega vértices.
 
-Desactivar la casilla conserva la distribucion de vertices de la maniobra
-actual y mantiene guardadas las dos medidas para volver a activarla. La casilla
-y las medidas se guardan en los perfiles; los perfiles antiguos usan la opcion
-activada con 5 m y 1 m. Los limites particulares del circulo y del fillet siguen
-aplicandose: la densificacion solo subdivide los segmentos que excedan su
-limite general. Para usar la funcion, cargue la fuente `bota_help_v5_pt.lsp`.
+Al desactivar la casilla, se conserva la distribución de vértices de la
+maniobra actual y las dos medidas quedan guardadas para volver a activarla.
+Los perfiles guardan tanto la casilla como las medidas; los perfiles antiguos
+usan la opción activada con 5 m y 1 m. Los límites propios del círculo y del
+fillet siguen vigentes: la densificación solo subdivide los segmentos que
+superen el límite general. Para usarla, cargue la fuente `bota_help.lsp`.
 
 ## Opciones durante el comando
 
@@ -135,7 +148,7 @@ limite general. Para usar la funcion, cargue la fuente `bota_help_v5_pt.lsp`.
 | `BOTA3` | Usa los valores actuales. | Solicita primero el radio de giro y luego el radio de fillet. | Ajusta parametros generales. | Ajusta radio y vertices del fillet. | No aplica. |
 | `BOTAFILLET` | Usa el radio configurado. | Cambia solo el radio de concordancia. | No aplica. | Ajusta radio y distancia maxima entre vertices. | Selecciona radio y distancia de vertices por angulo. |
 
-## BOTAFILLET automatico por angulo
+## BOTAFILLET automático por ángulo
 
 Con `A`, `BOTAFILLET` calcula el angulo interno entre los brazos definidos por los
 dos clics y busca una franja configurada. Si el angulo no pertenece a una
@@ -153,12 +166,12 @@ Configuracion inicial:
 Las cuatro franjas se modifican en `BOTAC`. Deben estar entre 0 y 180 grados,
 no solaparse y tener radio y distancia de vertices mayores que cero.
 
-Para encontrar la concordancia, `BOTAFILLET` analiza los segmentos consecutivos de
-la cabecera y de la guia dentro de una ventana radial definida por el radio de
-concordancia. Esto permite conservar y evaluar polilineas con vertices cortos,
+Para encontrar la concordancia, `BOTAFILLET` analiza los segmentos consecutivos
+de la cabecera y de la guía dentro de una ventana radial definida por el radio
+de concordancia. Así puede conservar y evaluar polilíneas con vértices cortos,
 por ejemplo de 0.5 m, sin elegir un tramo distante.
 
-## Requisitos y limites
+## Requisitos y límites
 
 - Seleccione entidades que AutoCAD pueda tratar como curvas y que tengan una
   geometria valida cerca de los clics.
@@ -176,20 +189,29 @@ por ejemplo de 0.5 m, sin elegir un tramo distante.
   una copia temporal de la cabecera de `2 x implemento` a cada lado de la
   interseccion. La cabecera original se corta unicamente en la tangencia final
   del circulo.
-Al resolver esa tangencia, BOTA2 usa el centro mas cercano al cruce de
-referencia de los offsets y admite una correccion maxima de `0.05 m` por
-imprecision numerica. El centro final se reproyecta a distancia exacta del
-radio interno sobre la cabecera.
+  Para resolver esa tangencia, BOTA2 usa el centro más cercano al cruce de
+  referencia de los offsets y admite una corrección máxima de `0.05 m` por
+  imprecisión numérica. El centro final se reproyecta a la distancia exacta
+  del radio interno sobre la cabecera.
   Si los offsets no se cruzan de forma real, la ultima comprobacion usa una
   extension virtual de hasta `1 m`, sin modificar ninguna entidad.
 - `BOTA3` limita la cabecera y la guia a una zona de trabajo local de al menos
   50 m desde el clic en la cabecera.
-- Revise visualmente el resultado antes de continuar el trazado. No hay una
-  suite de pruebas automatizadas para estas rutinas.
+- Revise visualmente el resultado antes de continuar el trazado. Las pruebas
+  automatizadas locales no sustituyen la validación funcional en Civil 3D.
 
 ## Archivos del repositorio
 
-- `bota_help_v5_pt.lsp`: fuente principal y version que se debe cargar.
-- `bota_help_v4*.lsp` y `BOTA*_*.lsp`: variantes anteriores o auxiliares,
-  conservadas como referencia.
-- `.fas` y `.vlx`: artefactos compilados; no se editan manualmente.
+- `bota_help.lsp`: fuente principal para cargar con `APPLOAD`.
+- `ribbon/`: código del complemento .NET e instrucciones de compilación.
+- `tests/`: pruebas automatizadas y casos para ejecutar en Civil 3D.
+- `tools/ribbon-preview/`: herramienta para generar vistas previas de iconos.
+- `dist/`: salida local de compilación, ignorada por Git junto con los
+  artefactos `.fas`, `.vlx` y `.prv`, logs y backups.
+
+Las fuentes anteriores se conservan en el historial de Git.
+
+## Licencia
+
+Este proyecto se distribuye bajo la [licencia MIT](LICENSE).
+Copyright (c) 2026 Maicon Marcarini.

@@ -10,7 +10,14 @@
 *.log
 /backups/
 
-# Duplicate DLLs copied locally; distribution versions live in dist/
+# Generated distributions and local compiled artifacts
+/dist/
+*.fas
+*.FAS
+*.vlx
+*.VLX
+*.prv
+*.PRV
 /BotaHelp-*.dll
 
 # Operating system and editor files
