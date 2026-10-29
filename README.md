@@ -1,5 +1,7 @@
 # BotaHelp
 
+Español | [Português (Brasil)](README.pt-BR.md)
+
 BotaHelp reúne rutinas AutoLISP para generar maniobras BOTA y concordancias
 segmentadas en Autodesk AutoCAD y Civil 3D. El código está en
 [`bota_help.lsp`](bota_help.lsp).
@@ -16,27 +18,50 @@ en el espacio intermedio de la conexión.
 
 ## Instalación
 
-Para usar la fuente independiente:
+Elija cómo quiere usar BotaHelp:
+
+| Forma de uso | Comando de carga | Archivo |
+| --- | --- | --- |
+| Ribbon completo, con botones, configuración, ayuda y comandos | `NETLOAD` | La DLL de [Releases](https://github.com/MaiconJ97/BotaHelp/releases/latest). |
+| Solo comandos, sin la pestaña Ribbon | `APPLOAD` | `bota_help.lsp`. |
+
+### Ribbon completo
+
+1. Descargue [BotaHelp-1.0.25.dll](https://github.com/MaiconJ97/BotaHelp/releases/download/v1.0.25/BotaHelp-1.0.25.dll)
+   y guárdela en una carpeta permanente donde tenga permiso de escritura.
+2. En Civil 3D/AutoCAD 2026 (x64, .NET 8), ejecute `NETLOAD` y seleccione esa DLL.
+3. Abra la pestaña **BotaHelp** para usar los botones. Si el Ribbon está oculto,
+   escriba `BOTAHELP`.
+
+La DLL incluye la fuente AutoLISP y los comandos. Para esta opción basta con
+cargar la DLL. Si va a reemplazar una versión ya cargada, cierre Civil 3D/AutoCAD
+y vuelva a abrirlo antes de cargar la nueva.
+
+### Solo comandos
 
 1. En AutoCAD o Civil 3D, ejecute `APPLOAD`.
 2. Cargue `bota_help.lsp`.
 3. Escriba `BOTAH` para ver la ayuda resumida o `BOTAC` para configurar los
    valores antes de ejecutar una maniobra.
 
-Para usar la pestaña Ribbon en Civil 3D/AutoCAD 2026 (x64, .NET 8), compile
-el complemento desde PowerShell en la raíz del repositorio:
+Esta opción permite ejecutar los comandos por su nombre y no crea la pestaña
+Ribbon.
+
+### Compilar la DLL (opcional)
+
+También puede generar la DLL desde el código fuente. En PowerShell, desde
+la raíz del repositorio:
 
 ```powershell
 .\ribbon\build.ps1
 ```
 
-Necesita un SDK .NET 8, Node.js y las bibliotecas instaladas de AutoCAD 2026.
-El script ejecuta las pruebas y genera `dist/BotaHelp.dll`. Cargue esa DLL
-con `NETLOAD` para acceder a los comandos, la configuración y la ayuda desde
-el Ribbon. La DLL incluye la fuente AutoLISP. Si el Ribbon está oculto,
-escriba `BOTAHELP`. Los compilados se generan en su equipo y no se incluyen
-en el repositorio. Las [instrucciones de la DLL](ribbon/README.md) explican
-la compilación y la carga.
+Para compilar necesita un SDK .NET 8, Node.js y las bibliotecas instaladas
+de AutoCAD 2026. El script ejecuta las pruebas y genera `dist/BotaHelp.dll`,
+que se carga con `NETLOAD`. Añada `-SkipChecks` para compilar sin ejecutar
+las pruebas. Los compilados se generan en su equipo; las DLL para descargar
+se distribuyen en Releases. Las [instrucciones de la DLL](ribbon/README.md)
+explican la compilación y la carga.
 
 Los comandos trabajan en el plano XY y generan polilíneas abiertas. Trabaje
 con copias de las entidades originales mientras comprueba cada maniobra.
