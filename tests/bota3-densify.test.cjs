@@ -114,22 +114,23 @@ function configRuntime(initial = {}) {
     '*botaf_auto_ranges*': [[87, 90, 10, 0.7], [90, 120, 12.5, 1], [120, 135, 15, 1.2], [135, 180, 18, 1.2]],
     '*bota_conectar_cab*': true, '*bota_cortar_circulo*': true,
     '*bota3_densify_configurado*': true, '*bota3_densify*': false,
-    '*bota_trans_l*': 3.5, '*bota3_densify_seg*': 0.75,
+    '*bota_trans_l*': 3.5, '*bota3_densify_seg*': 0.75, '*bota3_densify_min*': 0.4,
     ...initial,
   });
   return { rt, files };
 }
 
-test('profile roundtrip persists disabled state and both custom measurements', () => {
+test('profile roundtrip persists disabled state, margins and both spacing bounds', () => {
   const { rt } = configRuntime();
   assert.equal(rt.invoke('_bota_cfg_save_file', ['profile']), true);
   const values = rt.invoke('_bota_cfg_values_from_file', ['profile']);
-  assert.deepEqual(values.slice(11), [0, 3.5, 0.75]);
+  assert.deepEqual(values.slice(11), [0, 3.5, 0.75, 0.4]);
   rt.invoke('_bota_cfg_apply_values', [values]);
   rt.invoke('_bota3_init_densification');
   assert.equal(rt.get('*bota3_densify*'), false);
   assert.equal(rt.get('*bota_trans_l*'), 3.5);
   assert.equal(rt.get('*bota3_densify_seg*'), 0.75);
+  assert.equal(rt.get('*bota3_densify_min*'), 0.4);
 });
 
 test('older profiles use defaults; present but invalid values reject the entire profile', () => {
@@ -137,10 +138,14 @@ test('older profiles use defaults; present but invalid values reject the entire 
   rt.invoke('_bota_cfg_save_file', ['new']);
   const old = files.get('new').filter(line => !line.startsWith('BOTA3_'));
   files.set('old', old);
-  assert.deepEqual(rt.invoke('_bota_cfg_values_from_file', ['old']).slice(11), [1, 5, 1]);
+  assert.deepEqual(rt.invoke('_bota_cfg_values_from_file', ['old']).slice(11), [1, 5, 1, 0]);
+  files.set('previous', files.get('new').filter(line => !line.startsWith('BOTA3_DENSIFY_MIN=')));
+  assert.deepEqual(rt.invoke('_bota_cfg_values_from_file', ['previous']).slice(11), [0, 3.5, 0.75, 0]);
   for (const [key, value] of [
     ['BOTA3_DENSIFY', '2'], ['BOTA3_TRANS_L', '-1'], ['BOTA3_DENSIFY_SEG', '0'],
     ['BOTA3_TRANS_L', ''], ['BOTA3_DENSIFY_SEG', 'text'],
+    ['BOTA3_DENSIFY_MIN', '-0.1'], ['BOTA3_DENSIFY_MIN', '1.1'],
+    ['BOTA3_DENSIFY_MIN', ''], ['BOTA3_DENSIFY_MIN', 'text'],
   ]) {
     files.set('bad', [...old, `${key}=${value}`]);
     assert.equal(rt.invoke('_bota_cfg_values_from_file', ['bad']), null, `${key}=${value}`);
@@ -152,10 +157,10 @@ test('DCL action includes the toggle and strict numeric validation for new field
   const rt = runtime({ itoa: String });
   const action = rt.invoke('_bota_cfg_dcl_commit_action', [1]);
   assert.equal(parse(action).length, 1, 'complete executable action');
-  for (const key of ['b3Densify', 'b3TransL', 'b3DensSeg']) assert.ok(action.includes(key));
+  for (const key of ['b3Densify', 'b3TransL', 'b3DensSeg', 'b3MinSeg']) assert.ok(action.includes(key));
   const names = [];
   walk(definitions.get('_bota_show_dcl'), node => {
     if (node[0] === 'set_tile') names.push(node[1].str);
   });
-  for (const key of ['b3Densify', 'b3TransL', 'b3DensSeg']) assert.ok(names.includes(key));
+  for (const key of ['b3Densify', 'b3TransL', 'b3DensSeg', 'b3MinSeg']) assert.ok(names.includes(key));
 });

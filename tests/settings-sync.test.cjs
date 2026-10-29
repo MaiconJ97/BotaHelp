@@ -20,7 +20,7 @@ test('all settings travel both ways between existing drawings, including false a
   const bb = new Map(), a = drawing(bb), b = drawing(bb);
   const values = [12, 40, 0.7, 0, 28, 1.1, 11, 0.8,
     [[80, 90, 9, 0.5], [90, 110, 11, 0.8], [110, 130, 14, 1], [130, 180, 17, 1.2]],
-    0, 0, 0, 0, 0.6];
+    0, 0, 0, 0, 0.6, 0.4];
   a.set('*bota_recto_k*', 0);
   assert.equal(a.invoke('_bota_cfg_apply_values', [values]), true);
   b.invoke('_bota_session_pull');
@@ -77,7 +77,7 @@ test('the real DCL accept action publishes settings while invalid edits publish 
   const bb = new Map();
   const tiles = { rGiro: '14', tamImpl: '38', distSeg: '0.8', seguridad: '0',
     filletR: '25', filletSeg: '1', botafR: '10', botafSeg: '1',
-    joinCab: '0', cutCircle: '0', b3Densify: '0', b3TransL: '0', b3DensSeg: '0.5' };
+    joinCab: '0', cutCircle: '0', b3Densify: '0', b3TransL: '0', b3DensSeg: '0.5', b3MinSeg: '0.3' };
   let completed = 0;
   const a = drawing(bb, {
     get_tile: key => tiles[key], atof: Number, itoa: String,
@@ -91,11 +91,30 @@ test('the real DCL accept action publishes settings while invalid edits publish 
   assert.equal(completed, 1);
   assert.equal(b.get('*bota_rgiro*'), 14);
   assert.equal(b.get('*bota_trans_l*'), 0);
+  assert.equal(b.get('*bota3_densify_min*'), 0.3);
   const before = structuredClone([...bb]);
   tiles.rGiro = '-1';
   a.evaluate(action);
   assert.equal(completed, 1);
   assert.deepEqual([...bb], before);
+  tiles.rGiro = '14';
+  tiles.b3MinSeg = '0.6';
+  a.evaluate(action);
+  assert.equal(completed, 1, 'min > max cannot close the dialog or publish');
+  assert.deepEqual([...bb], before);
+});
+
+test('fresh sessions default to 0.8..1.5 m; older snapshots keep maximum-only behavior', () => {
+  const fresh = drawing(new Map());
+  assert.equal(fresh.get('*bota3_densify_min*'), 0.8);
+  assert.equal(fresh.get('*bota3_densify_seg*'), 1.5);
+  const values = fresh.invoke('_bota_cfg_current_values').slice(0, 14);
+  values[13] = 0.5;
+  const bb = new Map([['botahelp_settings_v1', [values, 0.75]]]);
+  const existing = drawing(bb);
+  assert.equal(existing.get('*bota3_densify_seg*'), 0.5);
+  assert.equal(existing.get('*bota3_densify_min*'), 0);
+  assert.equal(bb.get('botahelp_settings_v1')[0].length, 14, 'loading never replaces a session snapshot');
 });
 
 test('loading a valid profile publishes it; rejected and cancelled imports preserve the session', () => {

@@ -24,7 +24,7 @@ if (-not $SkipChecks) {
     $previousCases = $env:BOTAHELP_INVOCATION_CASES
     try {
         $env:BOTAHELP_INVOCATION_CASES = $testCases
-        & node --test (Join-Path $projectRoot 'tests\bota2.test.cjs') (Join-Path $projectRoot 'tests\bota3.test.cjs') (Join-Path $projectRoot 'tests\bota3-direction.test.cjs') (Join-Path $projectRoot 'tests\bota3-densify.test.cjs') (Join-Path $projectRoot 'tests\settings-sync.test.cjs') (Join-Path $projectRoot 'tests\ribbon-invocation.test.cjs')
+        & node --test (Join-Path $projectRoot 'tests\bota2.test.cjs') (Join-Path $projectRoot 'tests\bota3.test.cjs') (Join-Path $projectRoot 'tests\bota3-direction.test.cjs') (Join-Path $projectRoot 'tests\bota3-densify.test.cjs') (Join-Path $projectRoot 'tests\bota3-spacing.test.cjs') (Join-Path $projectRoot 'tests\settings-sync.test.cjs') (Join-Path $projectRoot 'tests\ribbon-invocation.test.cjs')
         if ($LASTEXITCODE -ne 0) { throw 'Fallaron las pruebas de AutoLISP o de carga desde la DLL.' }
     }
     finally { $env:BOTAHELP_INVOCATION_CASES = $previousCases }

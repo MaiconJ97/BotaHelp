@@ -1,7 +1,8 @@
 # Runs in a new, hidden AutoCAD 2026 instance using only disposable drawings.
 # Does not attach to an existing session or save DWG files.
 param(
-    [string]$Template = "$env:LOCALAPPDATA\Autodesk\C3D 2026\enu\Template\AutoCAD Template\acadiso.dwt"
+    [string]$Template = "$env:LOCALAPPDATA\Autodesk\C3D 2026\enu\Template\AutoCAD Template\acadiso.dwt",
+    [switch]$CheckSpacing
 )
 $ErrorActionPreference = 'Stop'
 if (-not (Test-Path -LiteralPath $Template)) { throw "Template not found: $Template" }
@@ -54,7 +55,7 @@ try {
     Invoke-CadCall { $taskAcad.Visible = $false }
     $taskA = New-CadDrawing
     $taskB = New-CadDrawing
-    $taskValues = "'(12.0 40.0 0.7 0.0 28.0 1.1 11.0 0.8 ((80.0 90.0 9.0 0.5) (90.0 110.0 11.0 0.8) (110.0 130.0 14.0 1.0) (130.0 180.0 17.0 1.2)) 0.0 0.0 0.0 0.0 0.6)"
+    $taskValues = "'(12.0 40.0 0.7 0.0 28.0 1.1 11.0 0.8 ((80.0 90.0 9.0 0.5) (90.0 110.0 11.0 0.8) (110.0 130.0 14.0 1.0) (130.0 180.0 17.0 1.2)) 0.0 0.0 0.0 0.0 0.6 0.4)"
     Invoke-CadCheck $taskA 'publish-all' `
         "(setq *BOTA_RECTO_K* 0.0) (_bota_cfg_apply_values $taskValues)" `
         "(equal (_bota_cfg_current_values) $taskValues 1e-8)"
@@ -70,6 +71,18 @@ try {
     Invoke-CadCheck $taskA 'reject-invalid' `
         '(setq bssBefore (vl-bb-ref (quote BOTAHELP_SETTINGS_V1))) (_bota_cfg_apply_values (cons -1.0 (cdr (_bota_cfg_current_values))))' `
         '(equal bssBefore (vl-bb-ref (quote BOTAHELP_SETTINGS_V1)))'
+    if ($CheckSpacing) {
+        $taskSpacingSuite = (Join-Path $PSScriptRoot 'bota3-densify-native.lsp').Replace('\', '/')
+        $taskSpacingLog = (Join-Path $taskResults 'spacing-native.log').Replace('\', '/')
+        $taskSpacingSetup = '(load "' + $taskSpacingSuite + '") (_bota3_define_helpers) (_bota3_define_pipeline) ' +
+            '(setq b3dtFailures 0 b3dtLog (open "' + $taskSpacingLog + '" "w")) ' +
+            '(setq b3dtResult (vl-catch-all-apply (quote b3dt_cases) nil)) ' +
+            '(if (vl-catch-all-error-p b3dtResult) (write-line (vl-catch-all-error-message b3dtResult) b3dtLog)) ' +
+            '(close b3dtLog)'
+        Invoke-CadCheck $taskC 'spacing-native' $taskSpacingSetup `
+            '(and (not (vl-catch-all-error-p b3dtResult)) (= b3dtFailures 0))'
+        Get-Content -LiteralPath $taskSpacingLog | Write-Output
+    }
     Write-Output "Native multi-drawing checks passed. Results: $taskResults"
 }
 finally {

@@ -4,6 +4,12 @@ BotaHelp reúne rutinas AutoLISP para generar maniobras BOTA y concordancias
 segmentadas en Autodesk AutoCAD y Civil 3D. El código está en
 [`bota_help.lsp`](bota_help.lsp).
 
+La maniobra BOTA es un giro de una máquina de pulverización cuyo objetivo es
+cubrir toda la parcela sin dejar zonas sin pulverizar.
+El recorrido considera el radio de giro y el ancho del implemento. En BOTA3,
+el fillet que conecta el giro con la guía debe mantener esa cobertura también
+en el espacio intermedio de la conexión.
+
 ## Demostración
 
 [Ver la demostración de BotaHelp en video](docs/demo/botahelp-demo.mp4).
@@ -101,9 +107,10 @@ al cargarlo. También puede ajustar los valores durante cada comando.
 | Seguridad linea guia | `BOTA2`, `BOTA3` | 0.2 m | Distancia adicional aplicada al offset de la guia. |
 | Radio Fillet | `BOTA3` | 30 m | Radio de la concordancia entre la maniobra y la guia. |
 | Distancia Max. Vertices Fillet | `BOTA3` | 1.5 m | Separacion maxima de vertices en el fillet de `BOTA3`. |
-| Activar densificacion | `BOTA3` | Activado | Agrega vertices en todo el recorrido de la maniobra y en las extensiones de entrada y salida. |
+| Controlar distancia entre vertices | `BOTA3` | Activado | Redistribuye los vértices del recorrido y comprueba la separación mínima y máxima. |
 | Longitud adicional en entrada y salida | `BOTA3` | 5 m | Longitud sobre la cabecera antes del giro y sobre la guia despues del fillet. Admite cero. |
-| Distancia Max. Vertices en el recorrido | `BOTA3` | 1 m | Limite de separacion medido a lo largo de la polilinea dentro de todo el tramo densificado. Debe ser positivo. |
+| Distancia Max. Vertices en el recorrido | `BOTA3` | 1.5 m | Separación máxima a lo largo de la polilínea dentro del tramo controlado. Debe ser positiva. |
+| Distancia Min. Vertices en el recorrido | `BOTA3` | 0.8 m | Separación mínima en el mismo tramo. Debe estar entre cero y el máximo; cero conserva el control solo del máximo. |
 | Radio de concordancia | `BOTAFILLET` | 10 m | Radio usado por `BOTAFILLET` en modo configurado. |
 | Distancia Max. Vertices | `BOTAFILLET` | 1.5 m | Separacion maxima de vertices de la concordancia en modo configurado. |
 
@@ -119,25 +126,45 @@ un radio de 10 m, la recta deseada mide 7.5 m. Si no cabe, la rutina puede
 usar una más corta. Los valores elegidos durante la sesión se conservan;
 para probar este ajuste en una sesión abierta, ingrese `L` y `0.75`.
 
-## Densificación opcional de BOTA3
+## Distancia entre vértices de BOTA3
 
-En `BOTAC`, use **Ativar densificacao de BOTA3** para activar o desactivar esta
-opcion. **Extensao antes/depois da manobra (m)** define la longitud adicional
-en cada extremo y **Distancia Max. Vertices no percurso (m)** define el limite
-de separacion. Los valores iniciales son 5 m por extremo y 1 m entre vertices.
+En `BOTAC`, active **Controlar distancia entre vertices de BOTA3** y defina
+**Distancia Min. Vertices no percurso (m)** y
+**Distancia Max. Vertices no percurso (m)**. Los valores iniciales son
+0.8 m y 1.5 m. La distancia se mide a lo largo de la polilínea entre vértices
+consecutivos; en un arco se usa su longitud, no la cuerda entre sus extremos.
 
-El límite abarca un tramo continuo: la cabecera antes de la entrada, el giro,
-la recta intermedia, el fillet y la guía después de la salida. La rutina
-conserva los vértices que ya estén más próximos, la forma de los arcos y los
-anchos de la polilínea. Si falta longitud en un extremo, usa la disponible
-sin prolongarlo. Fuera de este intervalo no agrega vértices.
+El control abarca el giro, la recta intermedia y el fillet, incluidas sus
+uniones. **Extensao antes/depois da manobra (m)** añade un tramo sobre la
+cabecera antes de la entrada y sobre la guía después de la salida, con 5 m
+por extremo como valor inicial. Si falta longitud, usa la disponible sin
+prolongar las entidades. Fuera de ese intervalo conserva los vértices.
 
-Al desactivar la casilla, se conserva la distribución de vértices de la
-maniobra actual y las dos medidas quedan guardadas para volver a activarla.
-Los perfiles guardan tanto la casilla como las medidas; los perfiles antiguos
-usan la opción activada con 5 m y 1 m. Los límites propios del círculo y del
-fillet siguen vigentes: la densificación solo subdivide los segmentos que
-superen el límite general. Para usarla, cargue la fuente `bota_help.lsp`.
+Con un mínimo mayor que cero, este rango tiene prioridad sobre los máximos
+individuales del círculo y del fillet en BOTA3. La rutina reparte los vértices
+del giro entre sus tangencias y redistribuye los tramos rectos o los arcos
+de una misma circunferencia. Conserva los quiebres y las variaciones de ancho;
+no elimina un vértice si eso cambia la forma. Si un tramo no admite una división
+dentro del rango, conserva sus vértices y continúa con los demás. Por ejemplo,
+una recta de 1.51 m entre puntos obligatorios queda sin densificar con un mínimo
+de 0.8 m y un máximo de 1.5 m.
+
+Antes de sustituir los originales, comprueba ambos límites en los tramos
+ajustados, con una tolerancia numérica de 0.000001 m. Al concluir, la línea
+de comandos indica cuántos tramos quedaron sin densificar y sus distancias
+inicial y final desde el inicio de la polilínea resultante. Esos tramos pueden
+conservar separaciones menores que el mínimo o mayores que el máximo. Un error
+al procesar la geometría o escribir el resultado sigue cancelando la maniobra
+y conserva los originales.
+
+Al desactivar la casilla, se omite el control y los valores quedan guardados.
+Un mínimo de cero conserva la densificación anterior: agrega vértices para
+cumplir el máximo y mantiene los existentes, aunque estén más próximos.
+Los perfiles guardan el mínimo, el máximo y las extensiones. Los perfiles y
+sesiones anteriores conservan su máximo y usan cero como mínimo; si tampoco
+incluían opciones de densificación, usan el control activado, 5 m de extensión
+y 1 m de máximo. Para aplicar el rango nuevo en una sesión existente, confirme
+0.8 m y 1.5 m en `BOTAC`. Cargue la fuente `bota_help.lsp` o una DLL recompilada.
 
 ## Opciones durante el comando
 

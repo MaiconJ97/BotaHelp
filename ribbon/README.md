@@ -33,6 +33,8 @@ WPF; no se distribuyen con el complemento. Para usar otra versión de AutoCAD/Ci
 o una revisión con otro runtime, compruebe la compatibilidad y recompile
 para ese entorno si hace falta.
 
+Para compilar sin ejecutar las pruebas, añada `-SkipChecks` al comando.
+
 ## Cargar la DLL
 
 1. Compile el complemento y copie `dist/BotaHelp.dll` a una carpeta permanente
@@ -72,10 +74,18 @@ Edite `bota_help.lsp` y vuelva a ejecutar `.\ribbon\build.ps1`. La DLL conserva
 la fuente del momento de la compilación. Para incorporar cambios posteriores
 del LSP independiente, debe volver a compilarla.
 
-Use `-OutputName BotaHelp-1.0.23.dll` para generar un archivo con otro nombre
+Use `-OutputName BotaHelp-1.0.25.dll` para generar un archivo con otro nombre
 cuando una versión anterior esté cargada y bloqueada por AutoCAD.
 `BOTAHELPINFO` muestra la versión y ruta de la DLL y los identificadores de
 la fuente incorporada y cargada para diagnosticar cargas antiguas.
+
+La versión 1.0.25 añade el rango de distancia entre vértices de BOTA3, con
+0.8 m de mínimo y 1.5 m de máximo como valores iniciales. En una sesión o
+perfil anterior, confirme ambos valores en `BOTAC` y active el control para
+usar el rango. Los tramos que no admitan una división dentro del rango
+conservan sus vértices y el procesamiento continúa con los demás. La línea
+de comandos informa cuántos quedaron sin densificar y dónde están sobre
+la polilínea resultante.
 
 ## Vista previa de iconos
 

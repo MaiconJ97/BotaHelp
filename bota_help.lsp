@@ -24,7 +24,8 @@
   (if (not *BOTA3_DENSIFY_CONFIGURADO*)
     (setq *BOTA3_DENSIFY* T *BOTA3_DENSIFY_CONFIGURADO* T))
   (if (not *BOTA_TRANS_L*) (setq *BOTA_TRANS_L* 5.000))
-  (if (not *BOTA3_DENSIFY_SEG*) (setq *BOTA3_DENSIFY_SEG* 1.000))
+  (if (not *BOTA3_DENSIFY_SEG*) (setq *BOTA3_DENSIFY_SEG* 1.500))
+  (if (not (numberp *BOTA3_DENSIFY_MIN*)) (setq *BOTA3_DENSIFY_MIN* 0.800))
 )
 (_bota3_init_densification)
 ;; Concordancia geometrica de BOTAF (independente de BOTA3).
@@ -507,8 +508,8 @@
   (if pair (cdr pair) nil)
 )
 
-(defun _bota_cfg_values_valid_p (values / rGiro tamImpl distSeg seguridad filletR filletSeg botafR botafSeg ranges joinCab cutCircle densify transLength transSeg)
-  (if (and (listp values) (= (length values) 14))
+(defun _bota_cfg_values_valid_p (values / rGiro tamImpl distSeg seguridad filletR filletSeg botafR botafSeg ranges joinCab cutCircle densify transLength transSeg minSeg)
+  (if (and (listp values) (or (= (length values) 14) (= (length values) 15)))
     (progn
       (setq rGiro     (nth 0 values))
       (setq tamImpl   (nth 1 values))
@@ -524,6 +525,7 @@
       (setq densify   (nth 11 values))
       (setq transLength (nth 12 values))
       (setq transSeg  (nth 13 values))
+      (setq minSeg (if (= (length values) 15) (nth 14 values) 0.0))
       (and (numberp rGiro) (> rGiro 0.0)
            (numberp tamImpl) (> tamImpl 0.0)
            (numberp distSeg) (> distSeg 0.0)
@@ -538,6 +540,7 @@
            (numberp densify) (or (= densify 0.0) (= densify 1.0))
            (numberp transLength) (>= transLength 0.0)
            (numberp transSeg) (> transSeg 0.0)
+           (numberp minSeg) (>= minSeg 0.0) (<= minSeg transSeg)
       )
     )
     nil
@@ -561,6 +564,8 @@
   (setq *BOTA3_DENSIFY* (/= (nth 11 values) 0.0))
   (setq *BOTA_TRANS_L* (nth 12 values))
   (setq *BOTA3_DENSIFY_SEG* (nth 13 values))
+  ;; Snapshots anteriores de 14 valores conservam o controle apenas de maximo.
+  (setq *BOTA3_DENSIFY_MIN* (if (= (length values) 15) (nth 14 values) 0.0))
   (setq *BOTA3_DENSIFY_CONFIGURADO* T)
 )
 
@@ -571,7 +576,7 @@
         (if *BOTA_CONECTAR_CAB* 1.0 0.0)
         (if *BOTA_CORTAR_CIRCULO* 1.0 0.0)
         (if *BOTA3_DENSIFY* 1.0 0.0)
-        *BOTA_TRANS_L* *BOTA3_DENSIFY_SEG*)
+        *BOTA_TRANS_L* *BOTA3_DENSIFY_SEG* *BOTA3_DENSIFY_MIN*)
 )
 
 (defun _bota_session_publish (/ values factor)
@@ -653,6 +658,7 @@
       (_bota_cfg_write_pair fn "BOTA3_DENSIFY" (if *BOTA3_DENSIFY* "1" "0"))
       (_bota_cfg_write_pair fn "BOTA3_TRANS_L" (rtos *BOTA_TRANS_L* 2 6))
       (_bota_cfg_write_pair fn "BOTA3_DENSIFY_SEG" (rtos *BOTA3_DENSIFY_SEG* 2 6))
+      (_bota_cfg_write_pair fn "BOTA3_DENSIFY_MIN" (rtos *BOTA3_DENSIFY_MIN* 2 6))
       (close fn)
       T
     )
@@ -709,6 +715,7 @@
               (_bota_cfg_optional_number data "BOTA3_DENSIFY" 1.0)
               (_bota_cfg_optional_number data "BOTA3_TRANS_L" 5.0)
               (_bota_cfg_optional_number data "BOTA3_DENSIFY_SEG" 1.0)
+              (_bota_cfg_optional_number data "BOTA3_DENSIFY_MIN" 0.0)
             )
           )
           (if (_bota_cfg_values_valid_p values)
@@ -785,12 +792,13 @@
     "(if (= (get_tile \"cutCircle\") \"1\") 1.0 0.0) "
     "(if (= (get_tile \"b3Densify\") \"1\") 1.0 0.0) "
     "(_bota_cfg_number (get_tile \"b3TransL\")) "
-    "(_bota_cfg_number (get_tile \"b3DensSeg\")))) "
+    "(_bota_cfg_number (get_tile \"b3DensSeg\")) "
+    "(_bota_cfg_number (get_tile \"b3MinSeg\")))) "
     "(if (_bota_cfg_values_valid_p _bota_dcl_values) "
     "(progn (_bota_cfg_apply_values _bota_dcl_values) (done_dialog "
     (itoa status)
     ")) "
-    "(alert \"Informe valores validos. Densificacao: extensao >= 0 e distancia entre vertices > 0. As faixas devem estar entre 0 e 180 graus, sem sobreposicao, e ter raio e segmento maiores que zero.\"))"
+    "(alert \"Informe valores validos. BOTA3: extensao >= 0 e 0 <= minimo <= maximo, com maximo > 0. As faixas devem estar entre 0 e 180 graus, sem sobreposicao, e ter raio e segmento maiores que zero.\"))"
     ")"
   )
 )
@@ -821,9 +829,10 @@
       (write-line "      label = \"Fillet (BOTA3)\";" fn)
       (write-line "      : edit_box { label = \"Raio do Fillet (m):\"; key = \"filletR\"; edit_width = 12; }" fn)
       (write-line "      : edit_box { label = \"Distancia Max. Vertices Fillet (m):\"; key = \"filletSeg\"; edit_width = 12; }" fn)
-      (write-line "      : toggle { label = \"Ativar densificacao de BOTA3\"; key = \"b3Densify\"; }" fn)
+      (write-line "      : toggle { label = \"Controlar distancia entre vertices de BOTA3\"; key = \"b3Densify\"; }" fn)
       (write-line "      : edit_box { label = \"Extensao antes/depois da manobra (m):\"; key = \"b3TransL\"; edit_width = 12; }" fn)
       (write-line "      : edit_box { label = \"Distancia Max. Vertices no percurso (m):\"; key = \"b3DensSeg\"; edit_width = 12; }" fn)
+      (write-line "      : edit_box { label = \"Distancia Min. Vertices no percurso (m):\"; key = \"b3MinSeg\"; edit_width = 12; }" fn)
       (write-line "    }" fn)
       (write-line "    : boxed_column {" fn)
       (write-line "      label = \"Concordancia Segmentada (BOTAFILLET)\";" fn)
@@ -879,6 +888,7 @@
             (set_tile "b3Densify" (if *BOTA3_DENSIFY* "1" "0"))
             (set_tile "b3TransL" (rtos *BOTA_TRANS_L* 2 3))
             (set_tile "b3DensSeg" (rtos *BOTA3_DENSIFY_SEG* 2 3))
+            (set_tile "b3MinSeg" (rtos *BOTA3_DENSIFY_MIN* 2 3))
             (set_tile "botafR"    (rtos *BOTAF_FILLET_R* 2 3))
             (set_tile "botafSeg"  (rtos *BOTAF_FILLET_SEG* 2 3))
             (setq i 1)
@@ -989,9 +999,12 @@
       (write-line "      : paragraph {" fn)
       (write-line "        : text_part { label = \"Raio Fillet: raio da concordancia (arco de conexao).\"; }" fn)
       (write-line "        : text_part { label = \"Fillet Seg.: distancia max. entre vertices da concordancia.\"; }" fn)
-      (write-line "        : text_part { label = \"BOTAC permite ativar/desativar a densificacao de BOTA3.\"; }" fn)
+      (write-line "        : text_part { label = \"BOTAC controla as distancias minima e maxima de BOTA3.\"; }" fn)
       (write-line "        : text_part { label = \"O limite cobre giro, reta e fillet, com extensao antes/depois.\"; }" fn)
-      (write-line "        : text_part { label = \"Padrao: 5 m por extremo e maximo de 1 m entre vertices.\"; }" fn)
+      (write-line "        : text_part { label = \"Padrao: 5 m por extremo; de 0.8 a 1.5 m ao longo da polilinha.\"; }" fn)
+      (write-line "        : text_part { label = \"Com minimo > 0, esta faixa prevalece sobre os maximos do circulo e fillet.\"; }" fn)
+      (write-line "        : text_part { label = \"Trechos sem divisao viavel ficam intactos; os demais continuam.\"; }" fn)
+      (write-line "        : text_part { label = \"A linha de comando informa os trechos mantidos fora da faixa.\"; }" fn)
       (write-line "      }" fn)
       (write-line "    }" fn)
       (write-line "    : boxed_column {" fn)
@@ -5701,11 +5714,213 @@
           e)))
   )
 
-  (defun b3_apply_densification (e entry exitPoint / dEntry dExit total low high result)
+  (defun b3_spacing_count (total minimum maximum / count)
+    ;; O menor numero de partes que respeita o maximo evita sobras curtas.
+    (if (and (> total 1e-8) (>= minimum 0.0) (> maximum 0.0) (<= minimum maximum))
+      (progn
+        (setq count (max 1 (b3_ceil (/ total maximum))))
+        (if (>= (/ total count) (- minimum 1e-6)) count)))
+  )
+
+  (defun b3_spacing_spans (e low high / obj index count d0 d1 cuts a b w0 w1 bulge f0 f1 spans valid)
+    ;; Snapshot antes de editar. Cada trecho: estacoes, pontos WCS, bulge,
+    ;; larguras e marca de inclusao na janela. Preserva o OCS ao regravar.
+    (setq obj (vlax-ename->vla-object e)
+          count (fix (vlax-curve-getEndParam e)) index 0 valid T)
+    (repeat count
+      (setq d0 (vlax-curve-getDistAtParam e index)
+            d1 (vlax-curve-getDistAtParam e (1+ index)))
+      (if (<= (- d1 d0) 1e-8)
+        (setq valid nil)
+        (progn
+          (setq cuts (list d0))
+          (if (and (> low (+ d0 1e-8)) (< low (- d1 1e-8)))
+            (setq cuts (append cuts (list low))))
+          (if (and (> high (+ d0 1e-8)) (< high (- d1 1e-8)))
+            (setq cuts (append cuts (list high))))
+          (setq cuts (append cuts (list d1)) bulge (vla-GetBulge obj index))
+          (vla-GetWidth obj index 'w0 'w1)
+          (while (cdr cuts)
+            (setq a (car cuts) b (cadr cuts)
+                  f0 (/ (- a d0) (- d1 d0)) f1 (/ (- b d0) (- d1 d0)))
+            (setq spans
+              (cons (list a b (vlax-curve-getPointAtDist e a) (vlax-curve-getPointAtDist e b)
+                          (b3_bulge_fraction bulge (- f1 f0))
+                          (+ w0 (* f0 (- w1 w0))) (+ w0 (* f1 (- w1 w0)))
+                          (and (>= a (- low 1e-8)) (<= b (+ high 1e-8)))) spans))
+            (setq cuts (cdr cuts)))))
+      (setq index (1+ index)))
+    (if valid (reverse spans))
+  )
+
+  (defun b3_spacing_tangent (span atEnd / unit half)
+    (setq unit (b3_unit (b3_v- (nth 3 span) (nth 2 span)))
+          half (* (if atEnd 2.0 -2.0) (atan (nth 4 span))))
+    (if unit
+      (list (- (* (car unit) (cos half)) (* (cadr unit) (sin half)))
+            (+ (* (car unit) (sin half)) (* (cadr unit) (cos half))) 0.0))
+  )
+
+  (defun b3_spacing_mergeable_p (a b / la lb qa qb)
+    ;; Junta apenas retas colineares ou arcos da mesma circunferencia,
+    ;; com tangente e rampa de largura continuas. Nunca elimina uma quina.
+    (setq la (- (nth 1 a) (car a)) lb (- (nth 1 b) (car b))
+          qa (atan (nth 4 a)) qb (atan (nth 4 b)))
+    (and (nth 7 a) (nth 7 b)
+         (equal (nth 3 a) (nth 2 b) 1e-8)
+         (< (abs (+ qa qb)) (- (/ pi 2.0) 1e-6))
+         (equal (/ qa la) (/ qb lb) 1e-10)
+         (equal (b3_spacing_tangent a T) (b3_spacing_tangent b nil) 1e-9)
+         (equal (nth 6 a) (nth 5 b) 1e-9)
+         (equal (/ (- (nth 6 a) (nth 5 a)) la)
+                (/ (- (nth 6 b) (nth 5 b)) lb) 1e-10))
+  )
+
+  (defun b3_spacing_runs (spans / runs span previous quarter)
+    (foreach span spans
+      (setq previous (car runs))
+      (if (and previous (b3_spacing_mergeable_p previous span))
+        (progn
+          (setq quarter (+ (atan (nth 4 previous)) (atan (nth 4 span))))
+          (setq runs
+            (cons (list (car previous) (nth 1 span) (nth 2 previous) (nth 3 span)
+                        (/ (sin quarter) (cos quarter)) (nth 5 previous) (nth 6 span) T
+                        (append (nth 8 previous) (list span)))
+                  (cdr runs))))
+        (setq runs (cons (append span (list (list span))) runs))))
+    (reverse runs)
+  )
+
+  (defun b3_spacing_plan (e runs minimum maximum / vertices span count index fraction nextFraction station point valid skipped original)
+    (setq valid (not (not runs)))
+    (foreach span runs
+      (if valid
+        (progn
+          (setq count (if (nth 7 span)
+                        (b3_spacing_count (- (nth 1 span) (car span)) minimum maximum) 1))
+          (if (not count)
+            (progn
+              ;; Conserva cada vertice original deste trecho e segue adiante.
+              ;; Nao transforma a excecao de espacamento em falha da manobra.
+              (setq skipped (cons (list (car span) (nth 1 span) (nth 2 span) (nth 3 span)) skipped))
+              (foreach original (nth 8 span)
+                (setq vertices
+                  (cons (list (trans (nth 2 original) 0 e) (nth 4 original)
+                              (nth 5 original) (nth 6 original)) vertices))))
+            (progn
+              (setq index 0)
+              (repeat count
+                (setq fraction (/ (float index) count)
+                      nextFraction (/ (float (1+ index)) count)
+                      station (+ (car span) (* fraction (- (nth 1 span) (car span))))
+                      point (trans (if (= index 0) (nth 2 span)
+                                     (vlax-curve-getPointAtDist e station)) 0 e))
+                (setq vertices
+                  (cons (list point (b3_bulge_fraction (nth 4 span) (/ 1.0 count))
+                              (+ (nth 5 span) (* fraction (- (nth 6 span) (nth 5 span))))
+                              (+ (nth 5 span) (* nextFraction (- (nth 6 span) (nth 5 span)))))
+                        vertices))
+                (setq index (1+ index))))))))
+    (if valid
+      (progn
+        (setq span (car (reverse runs)))
+        (list (reverse (cons (list (trans (nth 3 span) 0 e) 0.0 (nth 6 span) (nth 6 span)) vertices))
+              (reverse skipped))))
+  )
+
+  (defun b3_spacing_write (e vertices / data out pair inserted vertex)
+    ;; Modifica somente a polilinha temporaria; conserva propriedades,
+    ;; elevacao, normal e largura constante do DXF original.
+    (setq data (entget e))
+    (foreach pair data
+      (if (= (car pair) 90)
+        (setq out (cons (cons 90 (length vertices)) out))
+        (if (= (car pair) 10)
+          (if (not inserted)
+            (progn
+              (foreach vertex vertices
+                (setq out (cons (cons 10 (list (car (car vertex)) (cadr (car vertex)))) out))
+                (setq out (cons (cons 40 (nth 2 vertex)) out))
+                (setq out (cons (cons 41 (nth 3 vertex)) out))
+                (setq out (cons (cons 42 (nth 1 vertex)) out)))
+              (setq inserted T)))
+          (if (not (member (car pair) '(40 41 42 91))) (setq out (cons pair out))))))
+    (if inserted (entmod (reverse out)))
+  )
+
+  (defun b3_density_range_valid_p (e low high minimum maximum / index count a b valid)
+    ;; Valida a entidade FINAL, incluindo as unioes entre giro, reta e fillet.
+    (setq index 0 count (fix (vlax-curve-getEndParam e)) valid T)
+    (repeat count
+      (setq a (vlax-curve-getDistAtParam e index)
+            b (vlax-curve-getDistAtParam e (1+ index)))
+      (if (and (> b (+ low 1e-8)) (< a (- high 1e-8))
+               (or (< (- b a) (- minimum 1e-6)) (> (- b a) (+ maximum 1e-6))))
+        (setq valid nil))
+      (setq index (1+ index)))
+    valid
+  )
+
+  (defun b3_spacing_result_valid_p (e low high minimum maximum skipped / index count a b valid exempt span)
+    ;; Somente os trechos preservados pelo plano podem ficar fora da faixa.
+    (setq index 0 count (fix (vlax-curve-getEndParam e)) valid T)
+    (repeat count
+      (setq a (vlax-curve-getDistAtParam e index)
+            b (vlax-curve-getDistAtParam e (1+ index)))
+      (if (and (> b (+ low 1e-8)) (< a (- high 1e-8))
+               (or (< (- b a) (- minimum 1e-6)) (> (- b a) (+ maximum 1e-6))))
+        (progn
+          (setq exempt nil)
+          (foreach span skipped
+            (if (and (>= a (- (car span) 1e-6)) (<= b (+ (nth 1 span) 1e-6)))
+              (setq exempt T)))
+          (if (not exempt) (setq valid nil))))
+      (setq index (1+ index)))
+    valid
+  )
+
+  (defun b3_spacing_report (/ span)
+    (if *BOTA3_SPACING_SKIPPED*
+      (progn
+        (prompt (strcat "\nBOTA3: " (itoa (length *BOTA3_SPACING_SKIPPED*))
+                        " trecho(s) mantido(s) sem densificar, fora da faixa de "
+                        (rtos *BOTA3_DENSIFY_MIN* 2 3) " a " (rtos *BOTA3_DENSIFY_SEG* 2 3) " m."))
+        (foreach span *BOTA3_SPACING_SKIPPED*
+          (prompt (strcat "\n  Trecho de " (rtos (car span) 2 3) " a " (rtos (nth 1 span) 2 3)
+                          " m desde o inicio da polilinha; comprimento "
+                          (rtos (- (nth 1 span) (car span)) 2 3) " m.")))
+        (prompt "\nA manobra foi concluida com essas excecoes.")))
+    (princ)
+  )
+
+  (defun b3_spacing_interval (e low high minimum maximum / before start end plan vertices skipped)
+    (setq *BOTA3_SPACING_SKIPPED* nil)
+    (if (and e (= (cdr (assoc 0 (entget e))) "LWPOLYLINE") (< low high)
+             (numberp minimum) (>= minimum 0.0)
+             (numberp maximum) (> maximum 0.0) (<= minimum maximum))
+      (progn
+        (setq before (b2_curve_total_length e) start (vlax-curve-getStartPoint e)
+              end (vlax-curve-getEndPoint e)
+              plan (b3_spacing_plan e (b3_spacing_runs (b3_spacing_spans e low high)) minimum maximum)
+              vertices (car plan) skipped (cadr plan))
+        (if (and vertices (b3_spacing_write e vertices))
+          (progn
+            (entupd e)
+            (if (and (equal before (b2_curve_total_length e) 1e-5)
+                     (equal start (vlax-curve-getStartPoint e) 1e-6)
+                     (equal end (vlax-curve-getEndPoint e) 1e-6)
+                     (b3_spacing_result_valid_p e low high minimum maximum skipped))
+              (progn (setq *BOTA3_SPACING_SKIPPED* skipped) e))))))
+  )
+
+  (defun b3_apply_densification (e entry exitPoint / dEntry dExit total low high minimum result)
+    (setq *BOTA3_SPACING_SKIPPED* nil)
     (if (not *BOTA3_DENSIFY*) e
       (progn
+        (setq minimum (if (numberp *BOTA3_DENSIFY_MIN*) *BOTA3_DENSIFY_MIN* 0.0))
         (if (and (numberp *BOTA_TRANS_L*) (>= *BOTA_TRANS_L* 0.0)
                  (numberp *BOTA3_DENSIFY_SEG*) (> *BOTA3_DENSIFY_SEG* 0.0)
+                 (>= minimum 0.0) (<= minimum *BOTA3_DENSIFY_SEG*)
                  entry exitPoint
                  (b3_point_really_on_curve e entry 1e-4)
                  (b3_point_really_on_curve e exitPoint 1e-4))
@@ -5715,9 +5930,14 @@
                   total (b2_curve_total_length e)
                   low (max 0.0 (- (min dEntry dExit) *BOTA_TRANS_L*))
                   high (min total (+ (max dEntry dExit) *BOTA_TRANS_L*)))
-            (setq result (b3_densify_interval e low high *BOTA3_DENSIFY_SEG*))))
+            (setq result (if (> minimum 0.0)
+                           (b3_spacing_interval e low high minimum *BOTA3_DENSIFY_SEG*)
+                           (b3_densify_interval e low high *BOTA3_DENSIFY_SEG*)))))
         (if (not result)
-          (setq *BOTA3_FILLET_FAIL* "Nao foi possivel densificar o percurso preservando a geometria."))
+          (setq *BOTA3_FILLET_FAIL*
+            (strcat "Falha ao ajustar os vertices na faixa de "
+                    (rtos minimum 2 3) " a " (rtos *BOTA3_DENSIFY_SEG* 2 3)
+                    " m. Revise a geometria e os valores em BOTAC. Os originais foram preservados.")))
         result))
   )
   (defun b3_validate_inputs (header headerPick guide guidePick)
@@ -5874,7 +6094,7 @@
                                  u nrm len side a0 w wu disc sq root tt f pG dG vcf pCirc arcDir sweep
                                  radG arrTan tdir travel ext cands cand best nPieces pts k p filPts
                                  pGx copy parts tail arcEnt e
-                                 ls dctr cph sph sgnA nc nopt pEx pFl t1v pFin guidePieces)
+                                 ls dctr cph sph sgnA nc nopt pEx pFl t1v pFin guidePieces bounded)
     ;; cen/cr = centro y radio del giro; fr = radio del fillet.
     ;; ls = longitud de la reta entre el final del giro y el inicio del fillet (*B3_LS*).
     (setq guidePieces (b3_selected_guide_pieces guide guidePick)
@@ -6015,18 +6235,24 @@
            (setq pGx (b3_closest_point guide pG)
                  k   0
                  pts nil)
-           (foreach p (nth 4 turnData)
-             (if (< (* k step) (- travel 1e-6))
-               (setq pts (cons p pts))
-             )
-             (setq k (1+ k))
-           )
-           (setq filPts (b3_arc_points_center f fr pFin pG arcDir spacing))
+           (setq bounded (and *BOTA3_DENSIFY* (numberp *BOTA3_DENSIFY_MIN*)
+                              (> *BOTA3_DENSIFY_MIN* 0.0)))
+           (if bounded
+             ;; Reparte o arco util entre tangencias: nao deixa uma sobra
+             ;; curta ao recortar os vertices do circulo inteiro.
+             (setq pts (b3_arc_points_center cen cr anchor pCirc dirKeep *BOTA3_DENSIFY_SEG*))
+             (progn
+               (foreach p (nth 4 turnData)
+                 (if (< (* k step) (- travel 1e-6)) (setq pts (cons p pts)))
+                 (setq k (1+ k)))
+               (setq pts (reverse pts))))
+           (setq filPts (b3_arc_points_center f fr pFin pG arcDir
+                          (if bounded *BOTA3_DENSIFY_SEG* spacing)))
            ;; pCirc = fin del giro; pFin = inicio del fillet. Entre ambos queda la reta.
            (setq pts
-             (append (reverse pts)
-                     (if (> ls 1e-6) (list pCirc))
-                     filPts))
+             (if bounded
+               (append pts (if (> ls 1e-6) filPts (cdr filPts)))
+               (append pts (if (> ls 1e-6) (list pCirc)) filPts)))
            ;; El ultimo vertice pasa a ser exactamente el punto sobre la guia.
            (setq pts (append (reverse (cdr (reverse pts))) (list pGx)))
            (setq arcEnt (b3_lwpoly_styled pts header))
@@ -6134,7 +6360,7 @@
   (defun b3_pipeline (header guide headerPick guidePick center radius anchor cutRef count filletRadius spacing outerRadius
                       / b3Temps b3Outputs b3Originals b3Committed b2Temps saved pair doc mark result e)
     (_bota2_define_helpers)
-    (setq *BOTA3_FILLET_FAIL* nil)
+    (setq *BOTA3_FILLET_FAIL* nil *BOTA3_SPACING_SKIPPED* nil)
     (foreach pair '("CMDECHO" "OSMODE" "PEDITACCEPT")
       (setq saved (cons (cons pair (getvar pair)) saved)))
     (setq doc  (vla-get-ActiveDocument (vlax-get-acad-object)))
@@ -6152,12 +6378,15 @@
       (if (not (and b3Committed (member e b3Outputs))) (b3_delete_ent e)))
     (foreach pair saved (setvar (car pair) (cdr pair)))
     (if (not (vl-catch-all-error-p mark)) (vla-EndUndoMark doc))
-    (if b3Committed b3Outputs nil)
+    (if b3Committed
+      (progn (b3_spacing_report) b3Outputs)
+      (progn (setq *BOTA3_SPACING_SKIPPED* nil) nil))
   )
 )
 
 (defun b3_command_body ()
   (_bota_session_pull)
+  (setq *BOTA3_SPACING_SKIPPED* nil)
   (setq tol 1e-8)
 
   ;; Radio fijo de trabajo.
@@ -6247,6 +6476,8 @@
                         " | Seg.Fillet=" (rtos *BOTA_FILLET_SEG* 2 3)
                         " | Reta auto (x R giro)=" (rtos *BOTA_RECTO_K* 2 2)
                         " | Densificacao=" (if *BOTA3_DENSIFY* "Sim" "Nao")
+                        " | Vertices min/max=" (rtos *BOTA3_DENSIFY_MIN* 2 3)
+                        "/" (rtos *BOTA3_DENSIFY_SEG* 2 3)
                         " | Uniao completa=Sim"
                         "\nPressione Enter para continuar ou [R] raios / [C] gerais / [B] fillet / [L] reta: "
                       )
