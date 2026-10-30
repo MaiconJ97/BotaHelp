@@ -14,7 +14,7 @@ en el espacio intermedio de la conexión.
 
 ## Demostración
 
-[Ver la demostración de BotaHelp en video](docs/demo/botahelp-demo.mp4).
+https://github.com/user-attachments/assets/1eb176cd-32e1-4d61-b700-52f162321f60
 
 ## Instalación
 
