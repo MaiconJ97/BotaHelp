@@ -14,7 +14,7 @@ da conexão.
 
 ## Demonstração
 
-[Assista à demonstração do BotaHelp em vídeo](docs/demo/botahelp-demo.mp4).
+https://github.com/user-attachments/assets/1eb176cd-32e1-4d61-b700-52f162321f60
 
 ## Instalação
 
